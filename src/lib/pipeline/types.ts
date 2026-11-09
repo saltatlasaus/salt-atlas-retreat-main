@@ -8,7 +8,7 @@ export type PipelineJobStatus =
   | "done"
   | "failed";
 
-export type PipelineStage = "discover" | "scrape" | "research" | "generate" | "published";
+export type PipelineStage = "discover" | "scrape" | "research" | "generate" | "review" | "published";
 
 export type PipelineMessageRole = "user" | "assistant" | "status";
 
@@ -66,6 +66,15 @@ export interface PipelineDraft {
   createdAt: string;
 }
 
+export interface PipelineScrapeProgress {
+  runId: string;
+  apifyRunId: string;
+  status: string;
+  itemCount: number;
+  simulated: boolean;
+  targetNames: string[];
+}
+
 export interface PipelineBoard {
   spendGbp: number;
   capGbp: number;
@@ -76,5 +85,6 @@ export interface PipelineBoard {
   targets: PipelineTarget[];
   facts: PipelineFact[];
   drafts: Array<{ id: string; targetId: string; title: string; r2Key?: string }>;
+  scrapeProgress: PipelineScrapeProgress[];
   note?: string;
 }

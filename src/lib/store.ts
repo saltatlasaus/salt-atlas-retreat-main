@@ -1,7 +1,35 @@
+/** Seeded studio demo. The prompt pipeline keeps its own durable rows in D1.
+ *  Client: full state persists to localStorage so CEO / Research / Studio survive refresh and navigation. */
 import { useSyncExternalStore } from "react";
 import type { AppState, Resort } from "./types";
 import { seedState } from "./mock-data";
 import { newPage } from "./page-gen";
+
+const STUDIO_STORAGE_KEY = "salt-atlas-studio-state-v1";
+
+function loadPersistedState(): AppState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(STUDIO_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const o = parsed as Record<string, unknown>;
+    if (!Array.isArray(o["competitors"]) || !Array.isArray(o["resorts"]) || !Array.isArray(o["discoveryResults"])) return null;
+    return parsed as AppState;
+  } catch {
+    return null;
+  }
+}
+
+function persistState(next: AppState) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STUDIO_STORAGE_KEY, JSON.stringify(next));
+  } catch (err) {
+    console.warn("[store] localStorage persist failed", err);
+  }
+}
 
 function initial(): AppState {
   const s = seedState();
@@ -26,15 +54,36 @@ function initial(): AppState {
   return s;
 }
 
-let state: AppState = initial();
-const serverState = state;
+/** SSR / first paint: seeded demo. Client after microtask: may replace with localStorage. */
+const serverStateSnapshot: AppState = initial();
+let state: AppState = structuredClone(serverStateSnapshot);
 const listeners = new Set<() => void>();
+let hydrated = false;
 
-export function getState() { return state; }
+function applyHydrationFromStorage() {
+  if (typeof window === "undefined" || hydrated) return;
+  hydrated = true;
+  const persisted = loadPersistedState();
+  if (persisted) {
+    state = persisted;
+    listeners.forEach((l) => l());
+  }
+}
+
+function scheduleHydration() {
+  if (typeof window === "undefined" || hydrated) return;
+  queueMicrotask(() => applyHydrationFromStorage());
+}
+
+export function getState() {
+  return state;
+}
 export function mutate(fn: (draft: AppState) => void) {
+  applyHydrationFromStorage();
   const next = structuredClone(state);
   fn(next);
   state = next;
+  persistState(state);
   listeners.forEach((l) => l());
 }
 export function mutateResort(id: string, fn: (r: Resort) => void) {
@@ -43,10 +92,14 @@ export function mutateResort(id: string, fn: (r: Resort) => void) {
     if (r) fn(r);
   });
 }
-function subscribe(l: () => void) { listeners.add(l); return () => listeners.delete(l); }
+function subscribe(l: () => void) {
+  scheduleHydration();
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
 
 export function useStudio() {
-  return useSyncExternalStore(subscribe, getState, () => serverState);
+  return useSyncExternalStore(subscribe, getState, () => serverStateSnapshot);
 }
 export function useResort(id?: string) {
   const s = useStudio();

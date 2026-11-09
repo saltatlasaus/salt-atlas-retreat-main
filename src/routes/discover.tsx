@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ActivityLog, Mono, PageHeader, Panel, Pill, SourceTag } from "@/components/studio/ui-bits";
 import { DESTINATIONS } from "@/lib/mock-data";
 import { ApprovalRequired, discoveredResorts, activeCompetitors, invokeAgent } from "@/lib/agents/agent-client";
+import { AGENT_PER_CALL_APPROVAL_GBP_DEFAULT } from "@/lib/agents/spend-limits";
 import { mutate, useStudio } from "@/lib/store";
 
 import { cn } from "@/lib/utils";
@@ -140,7 +141,10 @@ function Discover() {
               <Sparkles className="size-4" /> {running ? "Researching…" : "Start discovery"}
             </Button>
             {costApproval !== null && <div className="rounded-lg border border-amber-400/60 bg-amber-50 p-3 text-xs text-amber-950">
-              <p>Estimated Claude cost £{costApproval.toFixed(3)}, above £0.10 per-call limit.</p>
+              <p>
+                Estimated Claude cost £{costApproval.toFixed(3)}, above £
+                {AGENT_PER_CALL_APPROVAL_GBP_DEFAULT.toFixed(2)} per-call limit.
+              </p>
               <Button size="sm" variant="outline" className="mt-2" onClick={() => void run(true)} disabled={running}>Approve this call</Button>
             </div>}
             {log.length > 0 && <div className="rounded-lg bg-muted/60 p-3"><ActivityLog lines={log} running={running} /></div>}

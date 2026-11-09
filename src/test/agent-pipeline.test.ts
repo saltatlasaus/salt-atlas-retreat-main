@@ -1,7 +1,7 @@
 import { describe, expect, beforeAll, it, vi } from "vitest";
 import type { Resort, PageSection } from "@/lib/types";
 import {
-  blankFacts, mergeVerifiedResearch, applyWrittenSections, applyEditorPatch, discoveredResorts,
+  blankFacts, fillOpenFacts, mergeVerifiedResearch, applyWrittenSections, applyEditorPatch, discoveredResorts,
 } from "@/lib/agents/agent-client";
 
 beforeAll(() => vi.stubGlobal("crypto", { randomUUID: () => "test-uuid" }));
@@ -45,11 +45,47 @@ describe("Agent evidence and patch gates", () => {
     expect(r.facts.find((f) => f.id === "reef-capacity")?.candidates[0]?.quote).toBe(quote);
     expect(r.exclusivity.status).toBe("needs_review");
   });
+  it("keeps a quote when only the line breaks differ", () => {
+    const r = resort();
+    const wrapped = "Accommodation\ncapacity is limited to 12 guests.";
+    const result = mergeVerifiedResearch(r, review("12 guests", wrapped), [page]);
+    expect(result.applied).toEqual(["reef-capacity"]);
+  });
+  it("fills a disagreement with the official value", () => {
+    const r = resort();
+    const fact = r.facts.find((item) => item.id === "reef-capacity");
+    if (!fact) throw new Error("missing fact");
+    fact.status = "conflict";
+    fact.candidates = [
+      { id: "off", value: "12 guests", sourceUrl: "https://reef.example/packages", sourceType: "official", checkedAt: "2026-11-02" },
+      { id: "comp", value: "20 guests", sourceUrl: "https://example.com/reef", sourceType: "competitor", checkedAt: "2026-11-02" },
+    ];
+    fillOpenFacts(r);
+    expect(fact.selected).toBe("12 guests");
+    expect(fact.status).toBe("conflict");
+  });
   it("rejects fabricated source quotes rather than filling missing research", () => {
     const r = resort();
     const result = mergeVerifiedResearch(r, review("12 guests", "Resort has unlimited guests"), [page]);
     expect(result.applied).toEqual([]);
     expect(r.facts.find((f) => f.id === "reef-capacity")?.status).toBe("missing");
+  });
+  it("sets pricing to Rates on request when no price evidence is returned", () => {
+    const r = resort();
+    const priceFact = r.facts.find((f) => f.id === "reef-price7");
+    if (!priceFact) throw new Error("missing price7 fact");
+    expect(priceFact.status).toBe("missing");
+    const result = mergeVerifiedResearch(r, {
+      facts: [],
+      missingFactIds: ["reef-price7"],
+      additionalSourceUrls: [],
+      exclusivity: { status: "needs_review", reasoning: "Check listings." },
+      readyToDraft: false,
+    }, [page]);
+    expect(result.applied).toEqual([]);
+    expect(priceFact.selected).toBe("Rates on request");
+    expect(priceFact.status).toBe("single");
+    expect(priceFact.reason).toContain("No currency");
   });
   it("only lets the Writer update an existing supported section", () => {
     const r = resort();

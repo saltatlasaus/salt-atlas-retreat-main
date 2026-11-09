@@ -4,23 +4,34 @@ APIFY_TOKEN=
 APIFY_ACTOR_ID=apify/website-content-crawler
 APIFY_ACTOR_BUILD=version-0
 
-# Server-only research agents (CEO · /ops). Do not commit live values.
-# Protect public access with Cloudflare Access before setting true.
+# Shared password. Required before a Claude call or a new Apify crawl.
+# Set a long random value. Unlock once in the studio sidebar (httpOnly cookie).
+STUDIO_ACCESS_SECRET=
+
+# Live Claude for the CEO agents and for /pipeline. Stays off until the studio password is set.
 ENABLE_LIVE_AGENT_CALLS=false
 
 # Shared Anthropic key: used by agent-server and by Claude Pipeline (/pipeline).
 ANTHROPIC_API_KEY=
+# Every agent role (scout, web search, reviewer, writer, editor, /pipeline) uses this model.
 ANTHROPIC_MODEL=claude-haiku-5-5
+# OPT-IN, off by default (cost goes up a lot). Moves scout/search/reviewer/writer/pipeline to a bigger model:
+# ANTHROPIC_MODEL_STRONG=
+# Or pin a single role: ANTHROPIC_MODEL_SCOUT / _SEARCH / _REVIEWER / _WRITER / _EDITOR / _PIPELINE
+# A rejected model id falls back to ANTHROPIC_MODEL instead of failing the run.
 
-# Google (optional, for Scout source lookup when wired)
-GOOGLE_SEARCH_API_KEY=
-GOOGLE_SEARCH_CX=
-GOOGLE_PLACES_API_KEY=
-
-# Agent cost estimates (CEO flow). Adjust if pricing changes.
+# Cost estimates in USD per million tokens (drive the spend counter and the approval gate).
 CLAUDE_INPUT_USD_PER_M=0.10
 CLAUDE_OUTPUT_USD_PER_M=0.50
+# Only used if you opt into a Sonnet/Opus-class model above. Defaults in code are rough estimates: set your real rates.
+# CLAUDE_SONNET_INPUT_USD_PER_M=3
+# CLAUDE_SONNET_OUTPUT_USD_PER_M=15
+# CLAUDE_OPUS_INPUT_USD_PER_M=15
+# CLAUDE_OPUS_OUTPUT_USD_PER_M=75
 USD_PER_GBP=1.30
 
-# Pipeline-only: daily GBP cap for orchestration LLM calls.
-PIPELINE_DAILY_BUDGET_GBP=0.10
+# CEO: estimated-cost gate per Claude call (scout, reviewer, writer, editor).
+AGENT_PER_CALL_APPROVAL_GBP=0.40
+
+# Pipeline (/pipeline): daily GBP cap for orchestration LLM calls.
+PIPELINE_DAILY_BUDGET_GBP=1.00

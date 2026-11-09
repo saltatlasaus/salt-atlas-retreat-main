@@ -4,7 +4,7 @@
  * Production: Cloudflare R2 (raw dataset JSON) + D1 (scrape_runs / scrape_pages).
  * Fallback: in-memory local adapter when bindings are missing or D1 is unusable.
  */
-import { env } from "cloudflare:workers";
+import { getCloudflareEnv } from "@/lib/cf-bindings";
 import type { ScrapeRunRecord, WccPage } from "./wcc-types";
 import { createCloudflareScrapeStorage } from "./scrape-storage-cf";
 
@@ -52,41 +52,32 @@ export const localScrapeStorage: ScrapeStorage = {
   },
 };
 
-let cached: ScrapeStorage | undefined;
 let cachedMode: "cloudflare" | "local" = "local";
 
-function hasCloudflareBindings(): boolean {
+function cloudStorage(): ScrapeStorage | undefined {
   try {
-    return Boolean(env?.DB && env?.SCRAPE_BUCKET);
+    const e = getCloudflareEnv();
+    if (!e?.DB || !e.SCRAPE_BUCKET) return undefined;
+    return createCloudflareScrapeStorage({ DB: e.DB, SCRAPE_BUCKET: e.SCRAPE_BUCKET });
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-/** Prefer R2+D1; if the first D1 touch fails (no migrations yet), fall back to memory. */
+/** Use this request's D1/R2. Fall back to memory when that store is empty or unavailable. */
 export function getScrapeStorage(): ScrapeStorage {
-  if (cached) return cached;
-
-  if (!hasCloudflareBindings()) {
-    cached = localScrapeStorage;
+  const cf = cloudStorage();
+  if (!cf) {
     cachedMode = "local";
-    return cached;
+    return localScrapeStorage;
   }
-
-  const cf = createCloudflareScrapeStorage({
-    DB: env.DB,
-    SCRAPE_BUCKET: env.SCRAPE_BUCKET,
-  });
-
-  // Lazy-validate: wrap so a missing-table error doesn't kill the Worker mid-request forever.
-  cached = {
+  cachedMode = "cloudflare";
+  return {
     async saveRun(run) {
       try {
         await cf.saveRun(run);
-        cachedMode = "cloudflare";
       } catch (err) {
         console.warn("[scrape-storage] D1/R2 saveRun failed — using local memory", err);
-        cached = localScrapeStorage;
         cachedMode = "local";
         await localScrapeStorage.saveRun(run);
       }
@@ -96,45 +87,47 @@ export function getScrapeStorage(): ScrapeStorage {
         return await cf.updateRun(id, patch);
       } catch (err) {
         console.warn("[scrape-storage] D1 updateRun failed — using local memory", err);
-        cached = localScrapeStorage;
         cachedMode = "local";
         return localScrapeStorage.updateRun(id, patch);
       }
     },
     async getRun(id) {
       try {
-        return await cf.getRun(id);
-      } catch {
-        return localScrapeStorage.getRun(id);
+        const run = await cf.getRun(id);
+        if (run) return run;
+      } catch (err) {
+        console.warn("[scrape-storage] D1 getRun failed — using local memory", err);
       }
+      return localScrapeStorage.getRun(id);
     },
     async listRuns() {
       try {
-        return await cf.listRuns();
-      } catch {
-        return localScrapeStorage.listRuns();
+        const runs = await cf.listRuns();
+        if (runs.length) return runs;
+      } catch (err) {
+        console.warn("[scrape-storage] D1 listRuns failed — using local memory", err);
       }
+      return localScrapeStorage.listRuns();
     },
     async savePages(runId, items) {
       try {
         await cf.savePages(runId, items);
       } catch (err) {
         console.warn("[scrape-storage] D1/R2 savePages failed — using local memory", err);
-        cached = localScrapeStorage;
         cachedMode = "local";
         await localScrapeStorage.savePages(runId, items);
       }
     },
     async getPages(runId) {
       try {
-        return await cf.getPages(runId);
-      } catch {
-        return localScrapeStorage.getPages(runId);
+        const pages = await cf.getPages(runId);
+        if (pages.length) return pages;
+      } catch (err) {
+        console.warn("[scrape-storage] D1/R2 getPages failed — using local memory", err);
       }
+      return localScrapeStorage.getPages(runId);
     },
   };
-  cachedMode = "cloudflare";
-  return cached;
 }
 
 export function scrapeStorageMode(): "cloudflare" | "local" {

@@ -5,6 +5,18 @@ const MAX_DEPTH = 3;
 const MAX_CONCURRENCY = 2;
 const MAX_RETRIES = 1;
 
+/**
+ * One crawl shape for resort fact extraction, used by CEO step 2 and the /pipeline scrape tool.
+ * Depth 0 only loads the start URL (one page), which cannot cover rates, rooms, surf and contact.
+ * Values stay inside the server caps above.
+ */
+export const RESORT_CRAWL_PRESET = {
+  maxCrawlDepth: 2,
+  maxCrawlPages: 35,
+  initialConcurrency: 2,
+  maxConcurrency: 2,
+} as const;
+
 export type PageCheck = "usable" | "http_error" | "challenge" | "thin_content" | "blocked_by_robots";
 
 export function safePublicUrl(raw: string): boolean {
@@ -56,7 +68,13 @@ export function checkPage(page: WccPage): PageCheck {
   if (http === 403 && /robots/i.test(page.text ?? page.markdown ?? "")) return "blocked_by_robots";
   if (http && http >= 400) return "http_error";
   const body = (page.markdown ?? page.text ?? "").trim();
-  if (/cloudflare ray id|verify you are human|checking your browser|captcha challenge|access denied.*security/i.test(body.slice(0, 5000))) return "challenge";
+  if (
+    /cloudflare ray id|verify you are human|checking your browser|captcha challenge|access denied.*security|one moment, please|request being verified|error establishing a database connection/i.test(
+      body.slice(0, 5000),
+    )
+  ) {
+    return "challenge";
+  }
   if (body.length < 100) return "thin_content";
   return "usable";
 }

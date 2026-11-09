@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { getCloudflareEnv } from "@/lib/cf-bindings";
 
 export function utcDay(d = new Date()): string {
   return d.toISOString().slice(0, 10);
@@ -14,6 +14,7 @@ export function newId(prefix: string): string {
 
 export function pipelineDb(): D1Database {
   try {
+    const env = getCloudflareEnv();
     if (!env?.DB) throw new Error("D1 binding DB is not available");
     return env.DB;
   } catch (err) {
@@ -24,6 +25,7 @@ export function pipelineDb(): D1Database {
 
 export function pipelineBucket(): R2Bucket {
   try {
+    const env = getCloudflareEnv();
     if (!env?.SCRAPE_BUCKET) throw new Error("R2 binding SCRAPE_BUCKET is not available");
     return env.SCRAPE_BUCKET;
   } catch (err) {

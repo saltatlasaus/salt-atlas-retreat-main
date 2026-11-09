@@ -1,8 +1,8 @@
 import type { AppState, Candidate, Category, Competitor, Fact, FactStatus, Resort, SourceUrl } from "./types";
 
 export const COMPETITORS: Competitor[] = [
-  { id: "awave", name: "A Wave Travel", domain: "awave.com.au" },
-  { id: "tpw", name: "The Perfect Wave", domain: "theperfectwave.com" },
+  { id: "awave", name: "A Wave Travel", domain: "awavetravel.com" },
+  { id: "tpw", name: "The Perfect Wave", domain: "perfectwavetravel.com" },
   { id: "worldsurfaris", name: "World Surfaris", domain: "worldsurfaris.com" },
   { id: "waterways", name: "Waterways Travel", domain: "waterwaystravel.com" },
   { id: "wavehunters", name: "Wavehunters", domain: "wavehunters.com" },

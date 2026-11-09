@@ -76,6 +76,8 @@ export interface WccPage {
     httpStatusCode?: number;
     contentType?: string;
   };
+  /** Set when pages are saved. Challenge and thin pages are not research evidence. */
+  quality?: "usable" | "http_error" | "challenge" | "thin_content" | "blocked_by_robots";
 }
 
 export type ApifyRunStatus =
@@ -107,7 +109,7 @@ export const DEFAULT_WCC_INPUT: Omit<WccInput, "startUrls"> = {
   crawlerType: "playwright:adaptive",
   includeUrlGlobs: [],
   excludeUrlGlobs: [],
-  maxCrawlDepth: 20,
+  maxCrawlDepth: 3,
   maxCrawlPages: 50,
   maxResults: 50,
   useSitemaps: false,
@@ -117,9 +119,9 @@ export const DEFAULT_WCC_INPUT: Omit<WccInput, "startUrls"> = {
   keepUrlFragments: false,
   ignoreCanonicalUrl: false,
   proxyConfiguration: { useApifyProxy: true },
-  initialConcurrency: 0,
-  maxConcurrency: 10,
-  maxRequestRetries: 3,
+  initialConcurrency: 1,
+  maxConcurrency: 2,
+  maxRequestRetries: 1,
   requestTimeoutSecs: 60,
   dynamicContentWaitSecs: 10,
   maxScrollHeightPixels: 5000,

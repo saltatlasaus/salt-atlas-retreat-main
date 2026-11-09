@@ -1,20 +1,25 @@
+import { FACT_HINTS, focusExcerpt, pickPagesForFacts } from "../agents/fact-hints";
+import { checkPage, RESORT_CRAWL_PRESET } from "../crawl-policy";
+import { cleanPageText, evidenceQuoteMatchesPage } from "../page-text";
 import { getScrapeStorage } from "../scrape-storage";
 import { createScrapeRunRecord } from "../scrape-server";
 import { DEFAULT_WCC_INPUT, type WccPage } from "../wcc-types";
 import { pipelineBucket } from "./db";
 import {
+  getJob,
   getTarget,
   insertDraft,
   insertFact,
   insertTarget,
   latestDraft,
   listFactsForTargets,
-  listJobsByStatus,
+  listMessages,
   listOpenTargets,
   listTargets,
   patchJob,
   patchTarget,
   resortKey,
+  settleJob,
 } from "./store";
 import type { PipelineDraftSection, PipelineTarget } from "./types";
 
@@ -51,7 +56,7 @@ const TOOLS = [
   {
     name: "scrape",
     description:
-      "Start one Apify Website Content Crawler run for pipeline targets that are not published. Returns immediately. Do not invent page content after this; wait until excerpts exist.",
+      "Start one polite Apify crawl per target URL (follows internal links to depth 2, up to 35 pages per resort: rates, rooms, surf, getting here, contact; concurrency capped). Multiple resorts crawl in parallel. Returns immediately; poll scrape progress until SUCCEEDED, then research.",
     input_schema: {
       type: "object",
       properties: {
@@ -62,7 +67,7 @@ const TOOLS = [
   {
     name: "research",
     description:
-      "Save facts taken only from scraped page excerpts. sourceUrl must be one of the crawled page URLs for that target. Do not invent values.",
+      `Save facts taken only from scraped page excerpts. "value" must be a short verbatim phrase copied from the page at sourceUrl (it is checked against the stored page text; paraphrases are rejected). sourceUrl must be one of the crawled page URLs for that target. Use these keys, and try to cover every one the excerpts support: ${Object.keys(FACT_HINTS).join(", ")}. Do not invent values; skip a key the excerpts do not state.`,
     input_schema: {
       type: "object",
       properties: {
@@ -119,7 +124,7 @@ const TOOLS = [
   {
     name: "publish",
     description:
-      "Store the draft in R2 and mark the target published. This does not deploy the public Salt Atlas website.",
+      "Queue a stored draft for a person to approve. Does not mark the resort published and does not deploy the public site.",
     input_schema: {
       type: "object",
       properties: {
@@ -162,21 +167,45 @@ function pagesForTarget(target: PipelineTarget, pages: WccPage[]): WccPage[] {
   });
 }
 
-export async function excerptsForTarget(target: PipelineTarget): Promise<string> {
-  if (!target.scrapeRunId) return "";
-  const pages = await getScrapeStorage().getPages(target.scrapeRunId);
-  const matched = pagesForTarget(target, pages).slice(0, 3);
-  return matched
-    .map((p) => {
-      const body = (p.markdown || p.text || "").replace(/\s+/g, " ").slice(0, 500);
-      return `- ${p.url}\n  ${body}`;
-    })
-    .join("\n");
+function usablePages(pages: WccPage[]): WccPage[] {
+  return pages.filter((page) => (page.quality ?? checkPage(page)) === "usable");
 }
 
-async function anyScrapeWaiting(): Promise<boolean> {
-  const waiting = await listJobsByStatus("waiting_apify");
-  return waiting.length > 0;
+/** Prefer official URL, then deeper paths, then most text — for better model excerpts. */
+function rankPagesForExcerpt(canonicalUrl: string, pages: WccPage[]): WccPage[] {
+  const norm = canonicalUrl.replace(/\/$/, "");
+  const score = (p: WccPage) => {
+    const u = p.url.replace(/\/$/, "");
+    let s = cleanPageText(p.markdown || p.text || "").length;
+    if (u === norm) s += 5000;
+    else if (u.startsWith(`${norm}/`)) s += 2000;
+    try {
+      s += Math.min(500, new URL(p.url).pathname.split("/").filter(Boolean).length * 80);
+    } catch {
+      /* skip */
+    }
+    const code = p.crawl?.httpStatusCode ?? 200;
+    if (code >= 200 && code < 300) s += 100;
+    return s;
+  };
+  return [...pages].sort((a, b) => score(b) - score(a));
+}
+
+/**
+ * Excerpts the orchestrator reads before calling `research`. Picks a page per template field (so contact,
+ * getting-here, rooms pages are not crowded out by the homepage), then keeps head + tail + relevant lines
+ * of each page within `charBudget` characters for this target.
+ */
+export async function excerptsForTarget(target: PipelineTarget, charBudget = 9000): Promise<string> {
+  if (!target.scrapeRunId) return "";
+  const pages = await getScrapeStorage().getPages(target.scrapeRunId);
+  const ranked = rankPagesForExcerpt(target.url, usablePages(pagesForTarget(target, pages)));
+  const keys = Object.keys(FACT_HINTS);
+  const chosen = pickPagesForFacts(ranked, keys, 6);
+  const perPage = Math.max(1200, Math.floor(charBudget / Math.max(1, chosen.length)));
+  return chosen
+    .map((p) => `- ${p.url}\n${focusExcerpt(cleanPageText(p.markdown || p.text || ""), keys, perPage)}`)
+    .join("\n");
 }
 
 export async function executeTool(jobId: string, name: string, input: unknown): Promise<ToolResult> {
@@ -198,9 +227,13 @@ async function discover(jobId: string, input: unknown): Promise<ToolResult> {
   const destination = String(data["destination"] ?? "").trim();
   const resorts = Array.isArray(data["resorts"]) ? data["resorts"] : [];
   if (!destination) return { text: "destination is required" };
+  const job = await getJob(jobId);
+  const messages = await listMessages(jobId);
+  const supplied = `${job?.instruction ?? ""}\n${messages.map((message) => message.content).join("\n")}`.toLowerCase();
   const existing = await listTargets();
   const seen = new Set(existing.map((t) => t.url.replace(/\/$/, "")));
   const saved: string[] = [];
+  const rejected: string[] = [];
   for (const raw of resorts.slice(0, 8)) {
     const row = asRecord(raw);
     const name = String(row["name"] ?? "").trim();
@@ -212,6 +245,11 @@ async function discover(jobId: string, input: unknown): Promise<ToolResult> {
     } catch {
       continue;
     }
+    const host = hostname(url);
+    if (!host || (!supplied.includes(url.toLowerCase()) && !supplied.includes(host))) {
+      rejected.push(url);
+      continue;
+    }
     const key = url.replace(/\/$/, "");
     if (seen.has(key)) continue;
     seen.add(key);
@@ -219,14 +257,14 @@ async function discover(jobId: string, input: unknown): Promise<ToolResult> {
     saved.push(`${target.name} (${target.id}) ${target.url}`);
   }
   await patchJob(jobId, { stage: "discover", status: "running" });
-  if (!saved.length) return { text: `No new resorts saved for ${destination}.` };
-  return { text: `Saved ${saved.length} resort(s) for ${destination}:\n${saved.join("\n")}` };
+  const rejectedNote = rejected.length
+    ? `\nRejected ${rejected.length} URL(s) that were not in the conversation.`
+    : "";
+  if (!saved.length) return { text: `No new resorts saved for ${destination}.${rejectedNote}` };
+  return { text: `Saved ${saved.length} resort(s) for ${destination}:\n${saved.join("\n")}${rejectedNote}` };
 }
 
 async function scrape(jobId: string, input: unknown): Promise<ToolResult> {
-  if (await anyScrapeWaiting()) {
-    return { text: "A scrape is already waiting on Apify. Do not start another.", halt: "apify" };
-  }
   const data = asRecord(input);
   const requested = Array.isArray(data["targetIds"])
     ? new Set(data["targetIds"].map((id) => String(id)))
@@ -238,34 +276,35 @@ async function scrape(jobId: string, input: unknown): Promise<ToolResult> {
   });
   if (!targets.length) return { text: "No discover/scrape targets to crawl." };
 
-  const startUrls = targets.map((t) => ({ url: t.url }));
-  const cap = Math.min(40, Math.max(4, startUrls.length * 6));
-  const record = await createScrapeRunRecord({
-    ...DEFAULT_WCC_INPUT,
-    startUrls,
-    maxCrawlDepth: 1,
-    maxCrawlPages: cap,
-    maxResults: cap,
-    saveMarkdown: true,
-  });
-
+  /** One polite run per resort, same preset as CEO step 2 (depth 2, 35 pages) so extraction sees more than the homepage. */
+  const lines: string[] = [];
+  let anyAsync = false;
   for (const target of targets) {
+    const record = await createScrapeRunRecord({
+      ...DEFAULT_WCC_INPUT,
+      startUrls: [{ url: target.url }],
+      maxCrawlDepth: RESORT_CRAWL_PRESET.maxCrawlDepth,
+      maxCrawlPages: RESORT_CRAWL_PRESET.maxCrawlPages,
+      maxResults: RESORT_CRAWL_PRESET.maxCrawlPages,
+      initialConcurrency: RESORT_CRAWL_PRESET.initialConcurrency,
+      maxConcurrency: RESORT_CRAWL_PRESET.maxConcurrency,
+      saveMarkdown: true,
+    });
     await patchTarget(target.id, { stage: "scrape", scrapeRunId: record.id });
+    if (record.status !== "SUCCEEDED") anyAsync = true;
+    lines.push(
+      `${target.name}: run ${record.id} apify=${record.apifyRunId} status=${record.status} simulated=${record.simulated}`,
+    );
   }
-  await patchJob(jobId, { stage: "scrape", status: record.status === "SUCCEEDED" ? "running" : "waiting_apify" });
+  await patchJob(jobId, { stage: "scrape", status: anyAsync ? "waiting_apify" : "running" });
 
-  if (record.status === "SUCCEEDED") {
-    const lines = [`Scrape ${record.id} finished (${record.itemCount} pages, simulated=${record.simulated}).`];
-    for (const target of targets) {
-      const excerpt = await excerptsForTarget({ ...target, stage: "scrape", scrapeRunId: record.id });
-      if (excerpt) lines.push(`\n${target.name} [${target.id}]\n${excerpt}`);
-    }
-    lines.push("Call research next, using only these excerpts.");
+  if (!anyAsync) {
+    lines.push("All runs finished locally (simulated). Call research next.");
     return { text: lines.join("\n") };
   }
 
   return {
-    text: `Scrape ${record.id} started on Apify (${record.apifyRunId}) for ${targets.length} URL(s). Stop until it finishes.`,
+    text: `${lines.join("\n")}\nApify is crawling in parallel. Progress appears on the right; the next step runs when all runs succeed.`,
     halt: "apify",
   };
 }
@@ -292,10 +331,15 @@ async function research(input: unknown): Promise<ToolResult> {
       rejected.push(`${key}: target has no scrape`);
       continue;
     }
-    const pages = await getScrapeStorage().getPages(target.scrapeRunId);
-    const allowed = new Set(pagesForTarget(target, pages).map((p) => p.url));
-    if (!allowed.has(sourceUrl)) {
-      rejected.push(`${key}: sourceUrl is not a crawled page`);
+    const pages = usablePages(pagesForTarget(target, await getScrapeStorage().getPages(target.scrapeRunId)));
+    const page = pages.find((item) => item.url === sourceUrl);
+    if (!page) {
+      rejected.push(`${key}: sourceUrl is not a usable crawled page`);
+      continue;
+    }
+    const body = cleanPageText(page.markdown || page.text || "");
+    if (!evidenceQuoteMatchesPage(value, body)) {
+      rejected.push(`${key}: value is not in the page text`);
       continue;
     }
     await insertFact({ targetId, key, value, sourceUrl });
@@ -365,22 +409,22 @@ async function publish(jobId: string, input: unknown): Promise<ToolResult> {
       lines.push(`${targetId}: missing`);
       continue;
     }
+    if (target.stage === "review") {
+      lines.push(`${target.name}: waiting for a person to approve publish`);
+      continue;
+    }
+    if (target.stage === "published") {
+      lines.push(`${target.name}: already approved`);
+      continue;
+    }
     const draft = await latestDraft(targetId);
     if (!draft) {
       lines.push(`${target.name}: no draft to publish`);
       continue;
     }
-    const r2Key = draft.r2Key ?? `drafts/${targetId}.json`;
-    await pipelineBucket().put(
-      r2Key,
-      JSON.stringify({ title: draft.title, sections: draft.sections, publishedAt: new Date().toISOString() }),
-      { httpMetadata: { contentType: "application/json" } },
-    );
-    await patchTarget(targetId, { stage: "published" });
-    lines.push(`${target.name}: marked published (${r2Key}). Public site was not deployed.`);
+    await patchTarget(targetId, { stage: "review" });
+    lines.push(`${target.name}: draft queued for a person to approve. Public site was not deployed.`);
   }
-  const open = await listOpenTargets();
-  if (!open.length) await patchJob(jobId, { status: "done", stage: "published" });
-  else await patchJob(jobId, { stage: "generate", status: "running" });
-  return { text: lines.join("\n") || "Nothing published." };
+  await settleJob(jobId);
+  return { text: lines.join("\n") || "Nothing queued for review." };
 }

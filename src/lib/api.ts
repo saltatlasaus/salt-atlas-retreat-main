@@ -11,6 +11,7 @@ import {
   getScrapeRun,
   getScrapeRunItems,
   listScrapeRuns,
+  resolveScrapeRunForSources,
   startScrapeRun,
 } from "./scrape-server";
 
@@ -71,6 +72,11 @@ export async function fetchScrapeRun(id: string): Promise<ScrapeRunRecord> {
 
 export async function fetchScrapeRunItems(id: string): Promise<WccPage[]> {
   return getScrapeRunItems({ data: { id } });
+}
+
+export async function fetchResolvedScrapeRunId(urls: string[]): Promise<string | null> {
+  const out = await resolveScrapeRunForSources({ data: { urls } });
+  return out.runId;
 }
 
 export async function downloadScrapeExport(id: string, format: "json" | "csv") {

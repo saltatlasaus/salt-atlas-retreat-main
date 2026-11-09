@@ -1,3 +1,4 @@
+import { syncScrapeRun } from "../scrape-server";
 import { addSpendGbp, anthropicModel, budgetRemainingGbp, dailyCapGbp, spendTodayGbp } from "./budget";
 import { assistantBlocks, claudeConfigured, claudeTurn, toolResultMessage, type ApiMessage } from "./claude";
 import {
@@ -7,14 +8,43 @@ import {
   listFactsForTargets,
   listJobs,
   listMessages,
-  listOpenTargets,
   listTargets,
+  listTargetsForJob,
   patchJob,
+  settleJob,
 } from "./store";
 import { executeTool, excerptsForTarget } from "./tools";
-import type { PipelineBoard, PipelineJob } from "./types";
+import type { PipelineBoard, PipelineJob, PipelineScrapeProgress } from "./types";
 
 const MAX_ROUNDS = 5;
+/** Evidence the orchestrator reads per turn (chars). Shared across all targets in research/scrape/generate. */
+const SNAPSHOT_EXCERPT_BUDGET = 24_000;
+const SNAPSHOT_MAX_CHARS = 30_000;
+
+/** Sync Apify status into storage and return one row per run (targets may share a run). */
+async function scrapeProgressForJob(jobId: string): Promise<PipelineScrapeProgress[]> {
+  const targets = (await listTargetsForJob(jobId)).filter((t) => t.stage === "scrape" && t.scrapeRunId);
+  const byRun = new Map<string, { names: string[] }>();
+  for (const t of targets) {
+    const id = t.scrapeRunId!;
+    const cur = byRun.get(id);
+    if (cur) cur.names.push(t.name);
+    else byRun.set(id, { names: [t.name] });
+  }
+  const out: PipelineScrapeProgress[] = [];
+  for (const [runId, { names }] of byRun) {
+    const run = await syncScrapeRun(runId);
+    out.push({
+      runId: run.id,
+      apifyRunId: run.apifyRunId,
+      status: run.status,
+      itemCount: run.itemCount,
+      simulated: run.simulated,
+      targetNames: names,
+    });
+  }
+  return out;
+}
 
 export async function buildStateSnapshot(): Promise<string> {
   const targets = await listTargets();
@@ -26,6 +56,10 @@ export async function buildStateSnapshot(): Promise<string> {
   if (!open.length) {
     lines.push("No unpublished targets.");
   }
+  const needsExcerpt = (t: { stage: string }) => t.stage === "research" || t.stage === "scrape" || t.stage === "generate";
+  const excerptTargets = open.filter(needsExcerpt).length;
+  // Split one evidence budget across the targets that need it, so the final slice never cuts a target off blind.
+  const excerptBudget = Math.min(9000, Math.max(2500, Math.floor(SNAPSHOT_EXCERPT_BUDGET / Math.max(1, excerptTargets))));
   for (const target of open) {
     const factLine = facts
       .filter((f) => f.targetId === target.id)
@@ -38,12 +72,12 @@ export async function buildStateSnapshot(): Promise<string> {
         draft ? ` draft=${draft.title}` : ""
       }${factLine ? ` facts: ${factLine}` : ""}`,
     );
-    if (target.stage === "research" || target.stage === "scrape" || target.stage === "generate") {
-      const excerpt = await excerptsForTarget(target);
+    if (needsExcerpt(target)) {
+      const excerpt = await excerptsForTarget(target, excerptBudget);
       if (excerpt) lines.push(excerpt);
     }
   }
-  return lines.join("\n").slice(0, 7000);
+  return lines.join("\n").slice(0, SNAPSHOT_MAX_CHARS);
 }
 
 function transcript(job: PipelineJob, prior: Array<{ role: string; content: string }>): ApiMessage[] {
@@ -103,13 +137,20 @@ export async function runAgent(jobId: string, nudge?: string): Promise<void> {
       return;
     }
 
-    const turn = await claudeTurn(apiMessages);
+    let turn;
+    try {
+      turn = await claudeTurn(apiMessages);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Claude call failed";
+      await patchJob(jobId, { status: "failed", errorMessage: message.slice(0, 300) });
+      await addMessage(jobId, "assistant", message);
+      return;
+    }
     await addSpendGbp(turn.costGbp);
     if (turn.text) await addMessage(jobId, "assistant", turn.text);
 
     if (!turn.toolUses.length) {
-      const open = await listOpenTargets();
-      await patchJob(jobId, open.length ? { status: "idle" } : { status: "done", stage: "published" });
+      await settleJob(jobId);
       return;
     }
 
@@ -141,6 +182,7 @@ export async function runAgent(jobId: string, nudge?: string): Promise<void> {
 export async function boardFor(jobId?: string, note?: string): Promise<PipelineBoard> {
   const jobs = await listJobs();
   const job = (jobId ? await getJob(jobId) : undefined) ?? jobs[0];
+
   const messages = job ? await listMessages(job.id) : [];
   const targets = await listTargets();
   const facts = await listFactsForTargets(targets.map((t) => t.id));
@@ -150,6 +192,10 @@ export async function boardFor(jobId?: string, note?: string): Promise<PipelineB
     title: d.title,
     ...(d.r2Key ? { r2Key: d.r2Key } : {}),
   }));
+  const scrapeProgress =
+    job && (job.status === "waiting_apify" || targets.some((t) => t.jobId === job.id && t.stage === "scrape"))
+      ? await scrapeProgressForJob(job.id)
+      : [];
   return {
     spendGbp: await spendTodayGbp(),
     capGbp: dailyCapGbp(),
@@ -160,6 +206,7 @@ export async function boardFor(jobId?: string, note?: string): Promise<PipelineB
     targets,
     facts,
     drafts,
+    scrapeProgress,
     ...(note ? { note } : {}),
   };
 }

@@ -1,11 +1,15 @@
+import "@/lib/cf-bindings-worker";
 import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
+import { runInCloudflareEnv } from "@/lib/cf-bindings";
 import { runScheduled } from "./lib/pipeline/cron";
 
-const fetch = createStartHandler(defaultStreamHandler);
+const startFetch = createStartHandler(defaultStreamHandler);
 
 export default {
-  fetch,
-  async scheduled(controller: ScheduledController, _env: CloudflareEnv, ctx: ExecutionContext) {
-    ctx.waitUntil(runScheduled(controller.cron));
+  fetch(request: Request, env: CloudflareEnv, _ctx: ExecutionContext) {
+    return runInCloudflareEnv(env, () => startFetch(request));
+  },
+  async scheduled(controller: ScheduledController, env: CloudflareEnv, ctx: ExecutionContext) {
+    ctx.waitUntil(runInCloudflareEnv(env, () => runScheduled(controller.cron)));
   },
 };

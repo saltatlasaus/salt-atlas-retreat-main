@@ -6,8 +6,14 @@ import {
   mockPagesForInput,
   startWebsiteContentCrawl,
 } from "./apify";
+import { checkPage, constrainCrawl } from "./crawl-policy";
 import { getScrapeStorage, r2DatasetKey, scrapeStorageMode } from "./scrape-storage";
+import { resolveScrapeRunIdForSources } from "./scrape-resolve";
 import type { ScrapeRunRecord, WccInput, WccPage } from "./wcc-types";
+
+function withQuality(pages: WccPage[]): WccPage[] {
+  return pages.map((page) => ({ ...page, quality: checkPage(page) }));
+}
 
 function newId(): string {
   return `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -28,12 +34,13 @@ export const listScrapeRuns = createServerFn({ method: "GET" }).handler(async ()
 
 export async function createScrapeRunRecord(input: WccInput): Promise<ScrapeRunRecord> {
   const storage = getScrapeStorage();
-  const started = await startWebsiteContentCrawl(input);
+  const limited = constrainCrawl(input);
+  const started = await startWebsiteContentCrawl(limited);
   const record: ScrapeRunRecord = {
     id: newId(),
     apifyRunId: started.apifyRunId,
     status: started.status,
-    input,
+    input: limited,
     startedAt: new Date().toISOString(),
     itemCount: 0,
     simulated: started.simulated,
@@ -41,7 +48,7 @@ export async function createScrapeRunRecord(input: WccInput): Promise<ScrapeRunR
   };
 
   if (started.simulated) {
-    const pages = mockPagesForInput(input);
+    const pages = withQuality(mockPagesForInput(limited));
     record.status = "SUCCEEDED";
     record.finishedAt = new Date().toISOString();
     record.itemCount = pages.length;
@@ -73,7 +80,7 @@ export async function syncScrapeRun(id: string): Promise<ScrapeRunRecord> {
 
   if (live.status === "SUCCEEDED" && (live.datasetId || run.datasetId)) {
     const datasetId = live.datasetId ?? run.datasetId!;
-    const pages = await listDatasetItems(datasetId);
+    const pages = withQuality(await listDatasetItems(datasetId));
     await storage.savePages(run.id, pages);
     patch.itemCount = pages.length;
     patch.r2Key = r2DatasetKey(run.id);
@@ -93,7 +100,11 @@ export const startScrapeRun = createServerFn({ method: "POST" })
     if (!data?.startUrls?.length) throw new Error("At least one start URL is required");
     return data;
   })
-  .handler(async ({ data: input }) => createScrapeRunRecord(input));
+  .handler(async ({ data: input }) => {
+    const { assertStudioUnlocked } = await import("./studio-gate.server");
+    assertStudioUnlocked();
+    return createScrapeRunRecord(input);
+  });
 
 export const getScrapeRun = createServerFn({ method: "GET" })
   .validator((data: { id: string }) => data)
@@ -106,6 +117,18 @@ export const getScrapeRunItems = createServerFn({ method: "GET" })
     const run = await storage.getRun(data.id);
     if (!run) throw new Error("Run not found");
     return storage.getPages(data.id);
+  });
+
+/** Link workflow when sources have scrape=completed but no internal run id (e.g. bulk crawl URL mismatch). */
+export const resolveScrapeRunForSources = createServerFn({ method: "POST" })
+  .validator((data: { urls: string[] } | undefined) => {
+    const urls = (data?.urls ?? []).map((u) => u.trim()).filter(Boolean);
+    if (!urls.length) throw new Error("No source URLs to match");
+    return { urls };
+  })
+  .handler(async ({ data }) => {
+    const runId = await resolveScrapeRunIdForSources(data.urls.map((url) => ({ url })));
+    return { runId: runId ?? null };
   });
 
 export const exportScrapeRun = createServerFn({ method: "GET" })

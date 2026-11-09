@@ -18,15 +18,21 @@ export const discoverySchema = z.object({
   notes: z.array(z.string()).max(15).default([]),
 });
 export const reviewSchema = z.object({
-  facts: z.array(z.object({
-    factId: z.string(),
-    value: z.string().min(1).max(3000),
-    sourceUrl: url,
-    sourceQuote: z.string().min(8).max(600),
-    reasoning: z.string().max(800),
-  })).max(80),
+  facts: z.array(z.unknown()).max(80).transform((items) => items.flatMap((item) => {
+    const parsed = z.object({
+      factId: z.string(),
+      value: z.string().min(1).max(3000),
+      sourceUrl: url,
+      sourceQuote: z.string().min(8).max(600),
+      reasoning: z.string().max(800),
+    }).safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  })),
   missingFactIds: z.array(z.string()).max(80).default([]),
-  additionalSourceUrls: z.array(url).max(12).default([]),
+  additionalSourceUrls: z.array(z.unknown()).max(12).default([]).transform((items) => items.flatMap((item) => {
+    const parsed = url.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  })),
   exclusivity: z.object({
     status: z.enum(["clear", "needs_review", "blocked"]),
     reasoning: z.string().min(1),
@@ -81,7 +87,7 @@ export interface AgentUsage {
 }
 export type AgentResponse =
   | { state: "approval_required"; kind: AgentKind; estimatedCostGbp: number; budgetGbp: number; reason: string }
-  | { state: "completed"; kind: AgentKind; data: string; usage: AgentUsage; warnings: string[] };
+  | { state: "completed"; kind: AgentKind; data: string; usage: AgentUsage; warnings: string[]; evidence?: Array<{ url: string; title: string; snippet: string }> };
 
 export const SOURCE_RANK: Record<SourceType, number> = {
   official: 0, resort_owned: 1, salt_atlas: 2, independent: 3, competitor: 4,

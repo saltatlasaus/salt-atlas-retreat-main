@@ -205,11 +205,52 @@ export async function listTargets(): Promise<PipelineTarget[]> {
   return rows.map(rowTarget);
 }
 
-export async function listOpenTargets(): Promise<PipelineTarget[]> {
+export async function listTargetsForJob(jobId: string): Promise<PipelineTarget[]> {
   const rows = await dbAll<Record<string, unknown>>(
-    `SELECT * FROM pipeline_targets WHERE stage != 'published' ORDER BY updated_at ASC LIMIT 40`,
+    `SELECT * FROM pipeline_targets WHERE job_id = ? ORDER BY updated_at ASC LIMIT 40`,
+    [jobId],
   );
   return rows.map(rowTarget);
+}
+
+export async function listOpenTargets(): Promise<PipelineTarget[]> {
+  const rows = await dbAll<Record<string, unknown>>(
+    `SELECT * FROM pipeline_targets WHERE stage NOT IN ('published', 'review') ORDER BY updated_at ASC LIMIT 40`,
+  );
+  return rows.map(rowTarget);
+}
+
+async function syncResort(target: PipelineTarget): Promise<void> {
+  try {
+    await dbRun(
+      `INSERT INTO resorts (resort_key, name, url, stage, scrape_run_id, source, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'pipeline', ?)
+       ON CONFLICT(resort_key) DO UPDATE SET
+         name = excluded.name,
+         url = excluded.url,
+         stage = excluded.stage,
+         scrape_run_id = excluded.scrape_run_id,
+         updated_at = excluded.updated_at`,
+      [target.resortKey, target.name, target.url, target.stage, target.scrapeRunId ?? null, target.updatedAt],
+    );
+  } catch (err) {
+    console.warn("[resorts] sync skipped", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Idle when work remains, review when only a person can publish, done when every target is published. */
+export async function settleJob(jobId: string): Promise<void> {
+  const targets = await listTargetsForJob(jobId);
+  const open = targets.filter((target) => target.stage !== "published" && target.stage !== "review");
+  if (open.length) {
+    await patchJob(jobId, { status: "idle" });
+    return;
+  }
+  if (targets.some((target) => target.stage === "review")) {
+    await patchJob(jobId, { status: "idle", stage: "review" });
+    return;
+  }
+  if (targets.length) await patchJob(jobId, { status: "done", stage: "published" });
 }
 
 export async function getTarget(id: string): Promise<PipelineTarget | undefined> {
@@ -238,6 +279,7 @@ export async function insertTarget(input: {
     ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
     [target.id, target.jobId, target.resortKey, target.name, target.url, target.stage, target.updatedAt],
   );
+  await syncResort(target);
   return target;
 }
 
@@ -249,12 +291,19 @@ export async function patchTarget(
   if (!cur) return;
   const stage = patch.stage ?? cur.stage;
   const scrapeRunId = patch.scrapeRunId === undefined ? (cur.scrapeRunId ?? null) : patch.scrapeRunId;
+  const updatedAt = nowIso();
   await dbRun(`UPDATE pipeline_targets SET stage = ?, scrape_run_id = ?, updated_at = ? WHERE id = ?`, [
     stage,
     scrapeRunId,
-    nowIso(),
+    updatedAt,
     id,
   ]);
+  await syncResort({
+    ...cur,
+    stage,
+    updatedAt,
+    ...(scrapeRunId ? { scrapeRunId } : {}),
+  });
 }
 
 export async function listFactsForTargets(targetIds: string[]): Promise<PipelineFact[]> {

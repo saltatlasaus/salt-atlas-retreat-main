@@ -12,6 +12,10 @@ import {
   Sun,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { studioGateStatus, unlockStudio } from "@/lib/studio-gate";
 import { cn } from "@/lib/utils";
 import { useStudio } from "@/lib/store";
 
@@ -30,6 +34,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { resorts, discoveryResults } = useStudio();
   const [dark, setDark] = useState(false);
   const [open, setOpen] = useState(false);
+  const [locked, setLocked] = useState(true);
+  const [password, setPassword] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  useEffect(() => {
+    void studioGateStatus()
+      .then((s) => setLocked(!s.unlocked))
+      .catch(() => setLocked(true));
+  }, []);
+  const unlock = async () => {
+    setUnlocking(true);
+    try {
+      await unlockStudio({ data: { password } });
+      setLocked(false);
+      setPassword("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unlock failed");
+    } finally {
+      setUnlocking(false);
+    }
+  };
   useEffect(() => { setDark(localStorage.getItem("sa-theme") === "dark"); }, []);
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
   const toggle = () => { const d = !dark; setDark(d); localStorage.setItem("sa-theme", d ? "dark" : "light"); };
@@ -71,8 +95,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="eyebrow mb-2 px-6 !text-sidebar-foreground/40">Workflow</div>
         {nav}
         <div className="mx-3 mt-4 space-y-3 rounded-lg border border-sidebar-border p-3 text-[11.5px] leading-relaxed text-sidebar-foreground/60">
-          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-sidebar-primary"><span className="size-1.5 animate-pulse rounded-full bg-sidebar-primary" />Demo mode</div>
-          Scrape uses Apify when APIFY_TOKEN is set. CEO agents on /ops run when ENABLE_LIVE_AGENT_CALLS=true. Pipeline on /pipeline uses Claude with a daily £ cap. Publishing stays simulated.
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-sidebar-primary"><span className="size-1.5 animate-pulse rounded-full bg-sidebar-primary" />{locked ? "Locked" : "Unlocked"}</div>
+          Paid Claude, search, and new scrapes need the studio password. Publishing stays simulated.
         </div>
         <button onClick={toggle} className="mx-6 mt-4 flex items-center gap-2 text-xs text-sidebar-foreground/60 hover:text-sidebar-accent-foreground">
           {dark ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />} {dark ? "Light" : "Dark"} mode
@@ -84,6 +108,28 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button onClick={() => setOpen(true)} aria-label="Open menu"><Menu className="size-5" /></button>
           <span className="font-semibold">Salt Atlas Studio</span>
         </header>
+        {locked && (
+          <form
+            className="flex flex-wrap items-center gap-2 border-b bg-background px-4 py-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void unlock();
+            }}
+          >
+            <span className="text-sm text-muted-foreground">Unlock the studio before live research.</span>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Studio password"
+              className="max-w-xs"
+              autoComplete="current-password"
+            />
+            <Button type="submit" disabled={unlocking || !password.trim()}>
+              {unlocking ? "Checking…" : "Unlock"}
+            </Button>
+          </form>
+        )}
         <main className="flex-1">{children}</main>
       </div>
     </div>

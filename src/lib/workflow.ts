@@ -45,8 +45,28 @@ export function nextAction(r: Resort): { label: string; to: string } {
   }
 }
 
+export function factNeedsResearch(fact: Pick<Fact, "status" | "selected">): boolean {
+  return fact.status === "missing" || fact.status === "conflict" || fact.status === "needs_confirmation";
+}
+
+export function openResearchFacts(r: Resort): Fact[] {
+  return r.facts.filter(factNeedsResearch);
+}
+
+export function researchClear(r: Resort): boolean {
+  return r.facts.length > 0 && openResearchFacts(r).length === 0;
+}
+
 export function canGenerate(r: Resort) {
-  return r.exclusivity.status !== "blocked" && completeness(r) >= 60 && !r.facts.some((f) => f.status === "conflict");
+  return r.exclusivity.status === "clear" && completeness(r) >= 60;
+}
+
+export function generateBlockReason(r: Resort): string {
+  if (r.exclusivity.status === "blocked") return "Exclusivity is blocked, so HTML stays off.";
+  if (r.exclusivity.status !== "clear") return "Mark exclusivity clear, then generate HTML.";
+  const score = completeness(r);
+  if (score < 60) return `Verified fields are ${score}%. Generate needs 60%.`;
+  return "";
 }
 
 export interface QualityCheck { id: string; label: string; ok: boolean; blocking: boolean; detail: string }

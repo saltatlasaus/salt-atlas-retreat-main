@@ -343,7 +343,7 @@ function Scrape() {
                   : "Crawl in progress…"}
               </div>
             ) : (
-              <div className="max-h-[480px] overflow-auto">
+              <div className="max-h-[min(75vh,920px)] overflow-auto">
                 <table className="w-full min-w-[720px] text-[13px]">
                   <thead className="sticky top-0 bg-card">
                     <tr className="border-b text-left text-muted-foreground">

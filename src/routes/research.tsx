@@ -1,16 +1,19 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Sparkles, Check, X, ArrowRight } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ActivityLog, ExclPill, FactPill, Mono, PageHeader, Panel, SourceTag } from "@/components/studio/ui-bits";
 import { CATEGORY_LABELS } from "@/lib/mock-data";
 import { mutateResort, useStudio } from "@/lib/store";
-import { canGenerate, completeness } from "@/lib/workflow";
+import { canGenerate, completeness, generateBlockReason } from "@/lib/workflow";
 import { newPage } from "@/lib/page-gen";
-import { fetchScrapeRunItems } from "@/lib/api";
-import { ApprovalRequired, invokeAgent, mergeVerifiedResearch, applyWrittenSections } from "@/lib/agents/agent-client";
+import { fetchResolvedScrapeRunId, fetchScrapeRunItems } from "@/lib/api";
+import { strictPagesForSources } from "@/lib/scrape-match";
+import type { WccPage } from "@/lib/wcc-types";
+import { ApprovalRequired, invokeAgent, mergeVerifiedResearch, applyWrittenSections, withLiveEvidence } from "@/lib/agents/agent-client";
+import { AGENT_PER_CALL_APPROVAL_GBP_DEFAULT } from "@/lib/agents/spend-limits";
 import type { Category, ExclusivityStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -38,21 +41,74 @@ function Research() {
   const [costApproval, setCostApproval] = useState<number | null>(null);
   const [writerApproval, setWriterApproval] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [scraped, setScraped] = useState<WccPage[]>([]);
+  const [scrapeNote, setScrapeNote] = useState("Loading scraped pages…");
+  const runKey = r?.sources.map((s) => s.runId ?? "").join(",") ?? "";
+  useEffect(() => {
+    if (!r) return;
+    let cancel = false;
+    const load = async () => {
+      let runs = [...new Set(r.sources.map((s) => s.runId).filter((id): id is string => !!id))];
+      if (!runs.length) {
+        setScrapeNote("Looking for a matching crawl…");
+        const urls = r.sources.map((s) => s.url).filter(Boolean);
+        const resolved = urls.length ? await fetchResolvedScrapeRunId(urls) : null;
+        if (cancel) return;
+        if (resolved) {
+          mutateResort(r.id, (x) => {
+            for (const s of x.sources) {
+              if (!s.runId) s.runId = resolved;
+            }
+          });
+          runs = [resolved];
+        }
+      }
+      if (!runs.length) {
+        setScraped([]);
+        setScrapeNote(
+          "No stored crawl matched these source URLs. Run a bulk crawl from /scrape that includes this site, or send from queue so run ids attach.",
+        );
+        return;
+      }
+      setScrapeNote("Loading scraped pages…");
+      const groups = await Promise.all(runs.map((id) => fetchScrapeRunItems(id)));
+      if (cancel) return;
+      const pages = strictPagesForSources(r.sources, groups.flat());
+      setScraped(pages);
+      setScrapeNote(pages.length ? "" : "The linked crawl has no page from this resort's website. Re-crawl it from the CEO page.");
+    };
+    void load().catch(() => {
+      if (!cancel) setScrapeNote("Could not load the scraped pages.");
+    });
+    return () => {
+      cancel = true;
+    };
+  }, [r, runKey]);
   if (!r) return <div className="p-10"><PageHeader title="Research & Verify" crumbs={[{ label: "Research & Verify" }]} description="No resorts in research. Send scraped resorts here." /></div>;
 
   const gapResearch = async (approveOverBudget = false) => {
     setRunning(true); setCostApproval(null);
     try {
-      const runs = [...new Set(r.sources.map((x) => x.runId).filter((id): id is string => !!id))];
-      if (!runs.length) throw new Error("No linked Apify run. Scrape source URLs first, then return to Research.");
+      let runs = [...new Set(r.sources.map((x) => x.runId).filter((id): id is string => !!id))];
+      if (!runs.length) {
+        const resolved = await fetchResolvedScrapeRunId(r.sources.map((s) => s.url));
+        if (resolved) {
+          mutateResort(r.id, (x) => {
+            for (const s of x.sources) {
+              if (!s.runId) s.runId = resolved;
+            }
+          });
+          runs = [resolved];
+        }
+      }
+      if (!runs.length) throw new Error("No stored crawl matched these URLs. Crawl this site from /scrape first.");
       const all = (await Promise.all(runs.map((id) => fetchScrapeRunItems(id)))).flat();
-      const sources = r.sources.map((s) => s.url.replace(/\/$/, ""));
-      const pages = all.filter((p) => sources.some((u) =>
-        p.url.replace(/\/$/, "") === u || p.url.startsWith(u + "/")));
-      if (!pages.length) throw new Error("No usable scraped pages match this resort's planned sources.");
+      const pages = strictPagesForSources(r.sources, all);
+      setScraped(pages);
+      if (!pages.length) throw new Error("The linked crawl has no page from this resort's website, so there is nothing of its own to research. Re-crawl it from the CEO page.");
       const reply = await invokeAgent({ kind: "reviewer", input: { resort: r, pages }, approveOverBudget });
       mutateResort(r.id, (x) => {
-        const outcome = mergeVerifiedResearch(x, reply.data, pages);
+        const outcome = mergeVerifiedResearch(x, reply.data, withLiveEvidence(pages, reply.evidence));
         for (const url of outcome.suggestedSources) {
           if (x.sources.some((s) => s.url === url)) continue;
           x.sources.push({ id: `suggested-${crypto.randomUUID()}`, url, type: "independent", selected: false, scrape: "pending" });
@@ -60,7 +116,7 @@ function Research() {
         x.researchLog.push(...reply.warnings);
         x.researchLog.push(`Claude Reviewer: £${(reply.usage.actualCostGbp ?? 0).toFixed(3)} for this call.`);
       });
-      toast.success("Reviewer processed source-backed facts. Check exclusivity and conflicts.");
+      toast.success("Reviewer filled quoted fields and searched for the ones still missing.");
     } catch (error) {
       if (error instanceof ApprovalRequired) {
         setCostApproval(error.estimatedCostGbp);
@@ -77,7 +133,7 @@ function Research() {
   const generate = async (approveOverBudget = false) => {
     setGenerating(true); setWriterApproval(null);
     try {
-      if (!canGenerate(r)) throw new Error("Resolve conflicts and the minimum verified research requirements first.");
+      if (!canGenerate(r)) throw new Error(generateBlockReason(r) || "Research is not ready to generate.");
       const provisional = newPage(r);
       const reply = await invokeAgent({
         kind: "writer", input: { resort: r, sections: provisional.sections }, approveOverBudget,
@@ -104,13 +160,19 @@ function Research() {
     <div className="mx-auto max-w-[1320px] px-5 py-8 md:px-10 md:py-10">
       <PageHeader eyebrow="Stage 03" title={r.name} crumbs={[{ label: "Scrape", to: "/scrape" }, { label: "Research & Verify" }]}
         description={<><span>{r.destination} · </span><Mono className="text-primary">{r.officialUrl}</Mono></>}
-        actions={<><Button variant="outline" onClick={() => void gapResearch()} disabled={running}><Sparkles className="size-4" />Research gaps</Button><Button onClick={() => void generate()} disabled={!canGenerate(r) || generating}>{generating ? "Generating…" : "Generate HTML"} <ArrowRight className="size-4" /></Button></>} />
+        actions={<><Button variant="outline" onClick={() => void gapResearch()} disabled={running}><Sparkles className="size-4" />{running ? "Verifying and filling…" : "Verify and fill"}</Button><Button onClick={() => void generate()} disabled={!canGenerate(r) || generating}>{generating ? "Generating…" : "Generate HTML"} <ArrowRight className="size-4" /></Button></>} />
       {writerApproval !== null && <Panel className="mb-4 flex items-center justify-between gap-3 p-3 text-sm">
-        <span>Writer estimate £{writerApproval.toFixed(3)} exceeds the £0.10 per-call approval threshold.</span>
+        <span>
+          Writer estimate £{writerApproval.toFixed(3)} exceeds the £
+          {AGENT_PER_CALL_APPROVAL_GBP_DEFAULT.toFixed(2)} per-call approval threshold.
+        </span>
         <Button onClick={() => void generate(true)} disabled={generating}>Approve writer call</Button>
       </Panel>}
       {costApproval !== null && <Panel className="mb-4 flex items-center justify-between gap-3 p-3 text-sm">
-        <span>Reviewer estimate £{costApproval.toFixed(3)} exceeds the £0.10 per-call approval threshold.</span>
+        <span>
+          Reviewer estimate £{costApproval.toFixed(3)} exceeds the £
+          {AGENT_PER_CALL_APPROVAL_GBP_DEFAULT.toFixed(2)} per-call approval threshold.
+        </span>
         <Button onClick={() => void gapResearch(true)} disabled={running}>Approve this call</Button>
       </Panel>}
       <div className="mb-6 flex flex-wrap items-center gap-3">
@@ -142,6 +204,22 @@ function Research() {
           ))}
         </div>
         <div className="space-y-4">
+          <Panel className="p-4">
+            <div className="mb-2 font-medium">Scraped pages</div>
+            {scrapeNote && <p className="text-xs text-muted-foreground">{scrapeNote}</p>}
+            <div className="max-h-[min(72vh,780px)] space-y-3 overflow-auto">
+              {scraped.map((page) => {
+                const body = (page.markdown ?? page.text ?? "").trim();
+                return (
+                  <div key={page.url} className="rounded-md border px-2 py-2 text-xs">
+                    <div className="font-medium">{page.metadata?.title ?? "Untitled page"}</div>
+                    <a href={page.url} className="mt-0.5 block truncate text-muted-foreground" target="_blank" rel="noreferrer">{page.url}</a>
+                    <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{body.slice(0, 700)}{body.length > 700 ? "…" : ""}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
           <Panel className="p-4"><div className="mb-2 font-medium">Exclusivity</div>
             {r.exclusivity.evidence.map((e, i) => <div key={i} className="mb-2 text-xs"><SourceTag t={e.sourceType} /> {e.note}</div>)}
             <div className="flex gap-1">{(["clear", "needs_review", "blocked"] as const).map((s) => <Button key={s} size="sm" variant={r.exclusivity.status === s ? "default" : "outline"} className="h-7 text-xs" onClick={() => setExcl(s)}>{s.replace("_", " ")}</Button>)}</div>
