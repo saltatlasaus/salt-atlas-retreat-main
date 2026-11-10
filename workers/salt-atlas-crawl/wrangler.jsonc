@@ -21,8 +21,8 @@
   "r2_buckets": [{ "binding": "SCRAPE_BUCKET", "bucket_name": "salt-atlas-scrape" }],
 
   "vars": {
-    // Set this to the Worker's own URL after the first deploy, e.g. https://salt-atlas-crawl.<account>.workers.dev
-    "PUBLIC_URL": "https://salt-atlas-crawl.CHANGE-ME.workers.dev",
+    // The Worker's own URL (Apify calls back here)
+    "PUBLIC_URL": "https://salt-atlas-crawl.accounts-c6e.workers.dev",
     "APIFY_ACTOR": "apify~website-content-crawler",
     "APIFY_MEMORY_MB": "4096",
     "APIFY_TIMEOUT_SECS": "3600",
