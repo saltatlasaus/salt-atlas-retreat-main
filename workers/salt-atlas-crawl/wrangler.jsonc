@@ -7,8 +7,8 @@
   // Workers Paid is required: the free plan allows 10 ms CPU per invocation, far too little for parsing.
   "limits": { "cpu_ms": 120000 },
 
-  // 05:00 UTC: crawl what the scout logged the day before (done by ~06:00). 09:00 UTC: watchdog.
-  "triggers": { "crons": ["0 5 * * *", "0 9 * * *"] },
+  // 05:00 UTC: crawl what the scout logged the day before (done by ~06:00). 09:00 UTC: watchdog. 11:05 UTC: photo download for ready page drafts.
+  "triggers": { "crons": ["0 5 * * *", "0 9 * * *", "5 11 * * *"] },
 
   "workflows": [
     { "name": "salt-atlas-crawl", "binding": "CRAWL", "class_name": "CrawlWorkflow" }

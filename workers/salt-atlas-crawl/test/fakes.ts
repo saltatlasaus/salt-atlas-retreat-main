@@ -1,7 +1,7 @@
 // Local stand-ins for D1 and R2, backed by Node's built-in SQLite, so the database logic
 // runs against the real schema and the real migration in tests.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import type { D1Database, D1PreparedStatement, D1Result, R2Bucket } from '../src/types.ts';
 
@@ -39,7 +39,8 @@ export class FakeD1 implements D1Database {
   db = new DatabaseSync(':memory:');
   constructor() {
     this.db.exec(readFileSync(new URL('../schema/prospecting_schema.sql', import.meta.url), 'utf8'));
-    this.db.exec(readFileSync(new URL('../migrations/0100_crawl_pipeline.sql', import.meta.url), 'utf8'));
+    const dir = new URL('../migrations/', import.meta.url);
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql')).sort()) this.db.exec(readFileSync(new URL(f, dir), 'utf8'));
   }
   prepare(sql: string): D1PreparedStatement {
     return new Stmt(this.db, sql);
@@ -63,12 +64,16 @@ export class FakeD1 implements D1Database {
 
 export class FakeR2 implements R2Bucket {
   store = new Map<string, string>();
+  bytes = new Map<string, ArrayBuffer>();
   async put(key: string, value: string | ArrayBuffer) {
     this.store.set(key, typeof value === 'string' ? value : new TextDecoder().decode(value));
+    if (typeof value !== 'string') this.bytes.set(key, value);
     return {};
   }
   async get(key: string) {
     const v = this.store.get(key);
-    return v === undefined ? null : { text: async () => v };
+    if (v === undefined) return null;
+    const b = this.bytes.get(key);
+    return { text: async () => v, body: b ? new Blob([b]).stream() : undefined, httpMetadata: { contentType: 'image/jpeg' } };
   }
 }

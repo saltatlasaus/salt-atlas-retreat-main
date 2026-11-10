@@ -2,6 +2,7 @@
 //
 //   Cron 05:00 UTC   start today's crawl workflow (pages the scout logged the day before)
 //   Cron 09:00 UTC   watchdog: alert if today's crawl failed or never ran
+//   Cron 11:05 UTC   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
 //   POST /apify/webhook          Apify says a run finished (wakes the workflow early)
 //   GET  /health                 liveness check
 //   Admin (Authorization: Bearer ADMIN_TOKEN):
@@ -14,6 +15,7 @@
 import { buildBrief } from './brief.ts';
 import { logEvent, pageStatements } from './db.ts';
 import { postToTeams } from './notify.ts';
+import { mirrorPhotos, servePhoto } from './photos.ts';
 import { processPage } from './process.ts';
 import type { BatchSource, Env, PageExtract } from './types.ts';
 import { CrawlWorkflow } from './workflow.ts';
@@ -131,6 +133,7 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === '/health') return new Response('ok');
+    if (url.pathname.startsWith('/photo/') && req.method === 'GET') return servePhoto(env, url.pathname.slice(7));
     if (url.pathname === '/apify/webhook' && req.method === 'POST') return handleWebhook(req, env, url);
 
     if (url.pathname.startsWith('/admin/')) {
@@ -168,6 +171,15 @@ export default {
     const batch = today(new Date(controller.scheduledTime));
     if (controller.cron === '0 9 * * *') {
       ctx.waitUntil(watchdog(env, batch));
+      return;
+    }
+    if (controller.cron === '5 11 * * *') {
+      ctx.waitUntil(
+        mirrorPhotos(env).then(
+          (r) => logEvent(env.DB, `photos-${batch}`, 'photos_mirrored', r),
+          (e) => postToTeams(env, `⚠️ Photo download ${batch} failed`, [['Error', String(e).slice(0, 300)]], true),
+        ),
+      );
       return;
     }
     ctx.waitUntil(

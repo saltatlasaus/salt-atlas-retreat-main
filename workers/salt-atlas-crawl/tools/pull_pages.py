@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Turn destination page drafts into real pages on the Salt Atlas website, photos included.
 
-Run it on a computer with internet, from anywhere, pointing at your copy of saltatlas-website:
+Run it on a computer with internet, from anywhere, pointing at your copy of saltatlas-website.
+Go-live (on the staging branch): python3 pull_pages.py --site ~/code/saltatlas-website --status built --live
 
     python3 pull_pages.py --site ~/code/saltatlas-website                 # every draft marked 'ready' in D1
     python3 pull_pages.py --site ~/code/saltatlas-website --json-dir drafts/   # page files in a folder instead
@@ -70,6 +71,8 @@ def main():
     ap.add_argument('--site', required=True, help='path to your saltatlas-website checkout')
     ap.add_argument('--json-dir', help='read <slug>.json page files from this folder instead of D1')
     ap.add_argument('--only', nargs='*', help='only these slugs')
+    ap.add_argument('--status', default='ready', help="which drafts to pull from D1: 'ready' (default) or 'built' (already on the staging branch)")
+    ap.add_argument('--live', action='store_true', help='go-live: make the pages indexable and mark the drafts live')
     a = ap.parse_args()
     site = os.path.abspath(os.path.expanduser(a.site))
     kit = os.path.join(site, 'tools/destinations/kit')
@@ -78,7 +81,8 @@ def main():
 
     pages, from_d1 = [], not a.json_dir
     if from_d1:
-        for r in d1("SELECT prospect_id, slug, kit_json, notes FROM page_drafts WHERE status = 'ready'"):
+        status = a.status if a.status in ('ready', 'built') else 'ready'
+        for r in d1(f"SELECT prospect_id, slug, kit_json, notes FROM page_drafts WHERE status = '{status}' AND kit_json <> '{{}}'"):
             pages.append((r['slug'], json.loads(r['kit_json']), r['notes']))
     else:
         for f in sorted(os.listdir(a.json_dir)):
@@ -91,6 +95,10 @@ def main():
         return
 
     blobmap = json.load(open(blobmap_path))
+    originals = {}
+    if from_d1:  # Worker photo URL -> original resort URL
+        for r in d1("SELECT url, key FROM photo_mirror WHERE status = 'ok'"):
+            originals[f"https://salt-atlas-crawl.accounts-c6e.workers.dev/photo/{r['key']}"] = r['url']
     failed = []
     for slug, page, notes in pages:
         urls = list(dict.fromkeys(images_in(page)))
@@ -105,7 +113,12 @@ def main():
             except Exception as e:  # keep going: the page still links the original
                 failed.append((slug, u, str(e)[:80]))
                 print(f'  FAIL {u[:90]}  {str(e)[:60]}')
-        page.setdefault('noindex', True)  # stays out of search until someone flips it
+        # Staged copies point at the Worker's photo mirror; go back to the resort's original for download.
+        page = json.loads(re.sub(r'https://salt-atlas-crawl\.[^/"]+/photo/[0-9a-f]{32}\.\w+', lambda m: originals.get(m.group(0), m.group(0)), json.dumps(page)))
+        if a.live:
+            page['noindex'] = False
+        else:
+            page.setdefault('noindex', True)  # stays out of search until go-live
         with open(os.path.join(kit, 'resorts', slug + '.json'), 'w') as f:
             json.dump(page, f, ensure_ascii=False, indent=2)
     with open(blobmap_path, 'w') as f:
@@ -124,7 +137,8 @@ def main():
 
     if from_d1:
         slugs = ','.join("'" + s.replace("'", "''") + "'" for s in keep)
-        d1(f"UPDATE page_drafts SET status = 'built', updated_at = datetime('now') WHERE slug IN ({slugs})")
+        new = 'live' if a.live else 'built'
+        d1(f"UPDATE page_drafts SET status = '{new}', updated_at = datetime('now') WHERE slug IN ({slugs})")
 
     print(f'\nBuilt {len(pages)} page(s). Photos that could not be fetched: {len(failed)}')
     for s, u, e in failed:

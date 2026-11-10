@@ -40,7 +40,8 @@ export interface D1Result<T = unknown> {
 }
 export interface R2Bucket {
   put(key: string, value: string | ArrayBuffer, opts?: Record<string, unknown>): Promise<unknown>;
-  get(key: string): Promise<{ text(): Promise<string> } | null>;
+  get(key: string): Promise<{ text(): Promise<string>; body?: ReadableStream; httpMetadata?: { contentType?: string } } | null>;
+  head?(key: string): Promise<unknown | null>;
 }
 export interface Workflow {
   create(opts: { id?: string; params?: unknown }): Promise<WorkflowInstance>;
