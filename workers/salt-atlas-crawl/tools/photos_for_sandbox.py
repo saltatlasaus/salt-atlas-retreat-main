@@ -5,7 +5,8 @@ into the Salt Atlas Destinations sandbox (which can't load photos from other web
 Run it in the salt-atlas-crawl folder, after `npx wrangler login`:
     python3 tools/photos_for_sandbox.py
 It writes ~/Downloads/sandbox-photos.zip: every downloaded photo of the ready and staged pages, named
-<key> as in photo_mirror, plus photos.json mapping each original photo address to its file.
+<key> as in photo_mirror, photos.json mapping each original photo address to its file, and the page
+files themselves (pages/<slug>.json, with pages/notes.json holding what to check on each).
 
 Needs: Python 3.9+, curl and Node (for npx wrangler). No other packages.
 """
@@ -42,7 +43,11 @@ def main():
             z.write(path, r['key'])
             mapping[r['url']] = r['key']
         z.writestr('photos.json', json.dumps(mapping, indent=1))
-    print(f'\nDone: {len(mapping)} photos in {OUT}' + (f', {len(bad)} failed' if bad else '') + '.')
+        pages = d1("SELECT slug, kit_json, notes FROM page_drafts WHERE status IN ('ready', 'built') AND kit_json <> '{}'")
+        for p in pages:
+            z.writestr(f"pages/{p['slug']}.json", p['kit_json'])
+        z.writestr('pages/notes.json', json.dumps({p['slug']: p['notes'] for p in pages}, indent=1))
+    print(f'\nDone: {len(mapping)} photos and {len(pages)} page files in {OUT}' + (f', {len(bad)} photos failed' if bad else '') + '.')
     print('Attach that zip to the Claude chat.')
 
 
