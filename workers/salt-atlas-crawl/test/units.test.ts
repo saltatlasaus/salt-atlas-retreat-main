@@ -284,3 +284,15 @@ test('map embeds are not review links; place links are', () => {
   const f = extractFromLinks(doc, 'https://kingfisher-mentawai.com/', 'kingfisher-mentawai.com', 'Indonesia');
   assert.deepEqual(f.reviewLinks, ['https://www.google.com/maps/place/Kingfisher+Resort/@-2.37,99.84']);
 });
+
+test('the 9am review list shows this morning\'s staged pages with links and checks', async () => {
+  const { FakeD1 } = await import('./fakes.ts');
+  const { stagedForReview } = await import('../src/review.ts');
+  const db = new FakeD1();
+  db.db.exec(`INSERT INTO prospects (id, name, country) VALUES ('a.com', 'A', 'Indonesia'), ('b.com', 'B', 'Indonesia');
+    INSERT INTO page_drafts (prospect_id, slug, kit_json, status, notes, updated_at) VALUES
+      ('a.com', 'aloita-resort', '{"name":"Aloita Resort"}', 'built', 'Check every photo. · staged 2026-11-11', datetime('now')),
+      ('b.com', 'old-page', '{"name":"Old"}', 'built', '', datetime('now', '-1 day'));`);
+  const list = await stagedForReview(db);
+  assert.deepEqual(list, [{ slug: 'aloita-resort', name: 'Aloita Resort', url: 'https://staging.saltatlas-website.pages.dev/destinations/aloita-resort/', check: 'Check every photo.' }]);
+});

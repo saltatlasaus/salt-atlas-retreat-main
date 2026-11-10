@@ -159,7 +159,7 @@ SELECT * FROM v_prospect_fact_sheet WHERE prospect_id = 'tengirri.com';
 | 01:53–05:53, hourly | Scheduled gap-fill session: 6 prospects per run → `prospect_facts` and a full page file in `page_drafts` (status `ready`) | Claude (fresh session) |
 | 06:30 | This Worker downloads the photos of ready drafts into R2. Photos a resort site refuses are retried on the next mornings (up to 3 tries) | Workers |
 | 07:03 | Scheduled staging session: ready drafts → `staging` branch, Teams list of preview links | Claude (fresh session) |
-| 07:30 | Watchdog: crawl failed, ready pages not staged, or photos refused by a resort site | Workers |
+| 07:30 | Teams: this morning's staged pages with preview links and what to check; alerts if the crawl failed, ready pages weren't staged, or a resort site refused photos | Workers |
 | When you like | `python3 tools/pull_pages.py --site <saltatlas-website>` on a computer with internet: downloads the photos to WebP, builds the pages, marks drafts `built` | Free |
 
 Every session logs its estimated cost to `cost_ledger`.

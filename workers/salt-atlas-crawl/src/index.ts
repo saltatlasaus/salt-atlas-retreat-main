@@ -2,7 +2,8 @@
 //
 //   Cron 01:00 UTC   start today's crawl workflow (pages the scout logged the day before)
 //   Cron 06:30 UTC   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
-//   Cron 07:30 UTC   watchdog: alert if today's crawl failed, ready pages weren't staged at 07:03, or resort sites refused photos
+//   Cron 07:30 UTC   Teams: this morning's staged pages to review (preview links + checks), and alerts if the crawl
+//                    failed, ready pages weren't staged at 07:03, or resort sites refused photos
 //   POST /apify/webhook          Apify says a run finished (wakes the workflow early)
 //   GET  /health                 liveness check
 //   Admin (Authorization: Bearer ADMIN_TOKEN):
@@ -16,6 +17,7 @@ import { buildBrief } from './brief.ts';
 import { logEvent, pageStatements } from './db.ts';
 import { postToTeams } from './notify.ts';
 import { mirrorPhotos, refusedPhotos, servePhoto } from './photos.ts';
+import { stagedForReview } from './review.ts';
 import { processPage } from './process.ts';
 import type { BatchSource, Env, PageExtract } from './types.ts';
 import { CrawlWorkflow } from './workflow.ts';
@@ -216,6 +218,13 @@ async function watchdog(env: Env, batch: string): Promise<void> {
   if (!crawlOk && !((waiting?.n ?? 0) === 0 && state === 'missing')) {
     await postToTeams(env, `⚠️ Crawl ${batch} needs a look`, [['Workflow state', state], ['Pages waiting', String(waiting?.n ?? 0)]], true,
       `Check GET /admin/status?date=${batch}, then restart with POST /admin/crawl?date=${batch}&force=1`);
+  }
+  // The 9am review list: this morning's staged pages, with preview links and what to check.
+  const staged = await stagedForReview(env.DB);
+  if (staged.length) {
+    await postToTeams(env, `🏄 ${staged.length} page${staged.length === 1 ? '' : 's'} ready to review ${batch}`,
+      staged.map((p): [string, string] => [p.name, `[Preview](${p.url}) · ${p.check}`]), false,
+      'On the staging preview only (not indexed). Say which ones should go live.');
   }
   // Drafts that were ready before the 07:03 staging run but are still not staged: the staging session failed or never ran.
   const unstaged = await env.DB
