@@ -73,6 +73,7 @@ curl -H "$H" "$W/admin/brief?prospect=tengirri.com"            # the brief as Cl
 curl -X POST -H "$H" "$W/admin/reparse?prospect=tengirri.com"  # re-parse stored HTML, no Apify cost
 curl -X POST -H "$H" "$W/admin/photos"                         # run the 06:30 photo download now (skips photos already copied)
 python3 tools/fetch_failed_photos.py                           # on your computer: fetch photos a resort site refused the Worker
+curl -o p.jpg "$W/img/<images.id>"                            # any crawled photo candidate (public; used by gap fill to look before choosing)
 npx wrangler tail                                              # live logs
 ```
 

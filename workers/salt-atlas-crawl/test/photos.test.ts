@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAX_ATTEMPTS, mirrorPhotos, photoKey, photoUrls, refusedPhotos, servePhoto } from '../src/photos.ts';
+import { MAX_ATTEMPTS, mirrorPhotos, photoKey, photoUrls, refusedPhotos, serveCandidate, servePhoto } from '../src/photos.ts';
 import type { Env } from '../src/types.ts';
 import { FakeD1, FakeR2 } from './fakes.ts';
 
@@ -43,4 +43,22 @@ test('mirror copies each photo once, records failures, and serves the copy', asy
   assert.equal(res.status, 200);
   assert.equal((await res.arrayBuffer()).byteLength, 5000);
   assert.equal((await servePhoto(env, '../secret')).status, 404);
+});
+
+test('candidate photos are served by images id only, copied once, and the copy is reused', async () => {
+  const db = new FakeD1();
+  const r2 = new FakeR2();
+  const env = { DB: db, SCRAPE_BUCKET: r2, PUBLIC_URL: 'https://w.dev' } as unknown as Env;
+  db.db.exec(`INSERT INTO prospects (id, name, country) VALUES ('t.com', 'T', 'Indonesia');`);
+  db.db.exec(`INSERT INTO images (id, prospect_id, page_url, image_url) VALUES (7, 't.com', 'https://t.com/', 'https://t.com/wave.jpg')`);
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; return new Response(new Uint8Array(4000), { headers: { 'content-type': 'image/jpeg' } }); }) as typeof fetch;
+  const a = await serveCandidate(env, '7');
+  assert.equal(a.status, 200);
+  assert.equal((await a.arrayBuffer()).byteLength, 4000);
+  assert.equal((await serveCandidate(env, '7')).status, 200);
+  assert.equal(calls, 1, 'second request is served from R2');
+  assert.equal((await serveCandidate(env, '8')).status, 404, 'unknown ids are refused');
+  assert.equal((await serveCandidate(env, 'x')).status, 404);
+  assert.equal(db.rows(`SELECT status FROM photo_mirror`)[0]?.status, 'ok');
 });

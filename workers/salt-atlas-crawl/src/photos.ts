@@ -111,3 +111,43 @@ export async function refusedPhotos(db: D1Database): Promise<{ prospect_id: stri
               GROUP BY m.prospect_id ORDER BY n DESC`)
     .all<{ prospect_id: string; n: number }>()).results;
 }
+
+/** GET /img/<images.id>: any crawled photo candidate, so the gap-fill session can look at a photo before
+ *  choosing it for a slot. Only ids in the images table are served (not an open proxy). The copy is kept in
+ *  R2 under the same key the 06:30 run uses, so a chosen photo is never fetched twice. */
+export async function serveCandidate(env: Env, idText: string): Promise<Response> {
+  const id = Number(idText);
+  if (!Number.isInteger(id) || id <= 0) return new Response('Not found', { status: 404 });
+  const row = await env.DB.prepare(`SELECT image_url, prospect_id FROM images WHERE id = ?1`).bind(id).first<{ image_url: string; prospect_id: string }>();
+  if (!row) return new Response('Not found', { status: 404 });
+  const key = await photoKey(row.image_url);
+  const cached = await env.SCRAPE_BUCKET.get(`photos/${key}`);
+  if (cached && cached.body) {
+    return new Response(cached.body, { headers: { 'Content-Type': cached.httpMetadata?.contentType || 'image/jpeg', 'Cache-Control': 'public, max-age=86400' } });
+  }
+  let status = 'failed', bytes = 0, type = '', error: string | null = null, buf: ArrayBuffer | null = null;
+  try {
+    const res = await fetch(row.image_url, { headers: { 'User-Agent': UA, Referer: new URL(row.image_url).origin + '/', Accept: 'image/*' }, redirect: 'follow' });
+    type = res.headers.get('content-type') || '';
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!type.startsWith('image/')) throw new Error(`not an image (${type})`);
+    buf = await res.arrayBuffer();
+    bytes = buf.byteLength;
+    if (bytes > MAX_BYTES) throw new Error(`too large (${bytes} bytes)`);
+    if (bytes < 2000) throw new Error('too small');
+    await env.SCRAPE_BUCKET.put(`photos/${key}`, buf, { httpMetadata: { contentType: type, cacheControl: 'public, max-age=31536000, immutable' } });
+    status = 'ok';
+  } catch (e) {
+    error = (e instanceof Error ? e.message : String(e)).slice(0, 200);
+  }
+  await env.DB
+    .prepare(`INSERT INTO photo_mirror (url, key, prospect_id, status, bytes, content_type, error, fetched_at, attempts)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), 1)
+              ON CONFLICT(url) DO UPDATE SET key = excluded.key, status = excluded.status, bytes = excluded.bytes,
+                content_type = excluded.content_type, error = excluded.error, fetched_at = excluded.fetched_at,
+                attempts = photo_mirror.attempts + 1`)
+    .bind(row.image_url, key, row.prospect_id, status, bytes, type, error)
+    .run();
+  if (status !== 'ok' || !buf) return new Response(`The resort's site refused this photo (${error})`, { status: 502 });
+  return new Response(buf, { headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=86400' } });
+}

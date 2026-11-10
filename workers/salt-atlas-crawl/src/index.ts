@@ -16,7 +16,7 @@
 import { buildBrief } from './brief.ts';
 import { logEvent, pageStatements } from './db.ts';
 import { postToTeams } from './notify.ts';
-import { mirrorPhotos, refusedPhotos, servePhoto } from './photos.ts';
+import { mirrorPhotos, refusedPhotos, serveCandidate, servePhoto } from './photos.ts';
 import { stagedForReview } from './review.ts';
 import { processPage } from './process.ts';
 import type { BatchSource, Env, PageExtract } from './types.ts';
@@ -136,6 +136,7 @@ export default {
     const url = new URL(req.url);
     if (url.pathname === '/health') return new Response('ok');
     if (url.pathname.startsWith('/photo/') && req.method === 'GET') return servePhoto(env, url.pathname.slice(7));
+    if (url.pathname.startsWith('/img/') && req.method === 'GET') return serveCandidate(env, url.pathname.slice(5));
     if (url.pathname === '/apify/webhook' && req.method === 'POST') return handleWebhook(req, env, url);
 
     if (url.pathname.startsWith('/admin/')) {
