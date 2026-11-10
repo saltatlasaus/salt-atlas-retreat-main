@@ -1,7 +1,7 @@
 // Photo mirror: copies every photo a ready page draft uses from the resort's own website into R2,
 // and serves it from this Worker at /photo/<key>. The daily staging task points staged pages at these
 // copies, so they never depend on hotlinking; at go-live tools/pull_pages.py converts them to WebP
-// in the website repo. Runs on the 11:05 UTC cron (after the morning gap-fill sessions).
+// in the website repo. Runs on the 06:30 UTC cron (after the 01:53 to 05:53 gap-fill sessions, before 07:03 staging).
 
 import type { D1Database, Env } from './types.ts';
 

@@ -7,7 +7,7 @@ Claude only does the judgement work (verifying, writing the destination page).
 ```
 Scout (Claude, 2 runs a day)          Worker (this repo, no Claude tokens)                       Claude (verify + write)
 ───────────────────────────           ──────────────────────────────────────────                 ───────────────────────
-logs operator URLs to D1  ──────────▶ 05:00 UTC cron starts one Workflow per day                 reads prospects.brief_md
+logs operator URLs to D1  ──────────▶ 01:00 UTC cron starts one Workflow per day                 reads prospects.brief_md
   sources.crawl_status='pending'       1 claim today's pending + retryable pages                 (≈2–4k tokens per resort)
                                        2 start ONE Apify run (hard $ cap)                        + v_page_images for photos
                                        3 wait: Apify webhook, or poll every 15 min
@@ -15,7 +15,7 @@ logs operator URLs to D1  ──────────▶ 05:00 UTC cron start
                                        5 reconcile pages Apify did not return
                                        6 read real pixel sizes of top photos (header bytes only)
                                        7 build one brief per resort → prospects.brief_md
-                                       8 Teams summary · 09:00 watchdog if anything went wrong
+                                       8 Teams summary · 07:30 watchdog if anything went wrong
 ```
 
 ## What Claude reads
@@ -62,7 +62,7 @@ Raw HTML is kept so the parser can be improved and re-run for free (`/admin/repa
 
 ## Day to day
 
-Nothing to do. The scout logs URLs; the Worker crawls at 05:00 UTC; a Teams card arrives when it finishes.
+Nothing to do. The scout logs URLs; the Worker crawls at 01:00 UTC; a Teams card arrives when it finishes.
 
 ```bash
 H="Authorization: Bearer $ADMIN_TOKEN"; W=https://salt-atlas-crawl.<account>.workers.dev
@@ -102,7 +102,7 @@ npx wrangler tail                                              # live logs
 | Database limits (1,000 queries per run, 100 values per query) | Pages are processed 15 per step, each page's writes in one transaction. |
 | Pages left with an old date by the scout or a crashed run | Adopted by the next day's run, unless that day's crawl is still running. |
 | Secrets missing or wrong | Workflow stops at the first step with a clear error (no retries, no cost) and a Teams alert. |
-| Nothing happens at all | 09:00 UTC watchdog posts to Teams if the day's crawl failed or never ran while pages are waiting. |
+| Nothing happens at all | 07:30 UTC watchdog posts to Teams if the day's crawl failed or never ran while pages are waiting, or if ready pages weren't staged at 07:03. |
 
 ## Cost controls in one place
 
@@ -150,11 +150,14 @@ SELECT * FROM v_prospect_fact_sheet WHERE prospect_id = 'tengirri.com';
 
 ## Daily flow and page drafts
 
-| When (UTC) | What | Cost |
+| When (UTC, all year) | What | Cost |
 |---|---|---|
 | 12:47 and 19:47 | Scheduled scout session: up to 15 prospects each, logged to `prospects` / `sources` | Claude (fresh session) |
-| 05:00 | This Worker crawls everything pending; briefs by ~06:00 | Apify + Workers |
-| 06:53–10:53, hourly (London time) | Scheduled gap-fill session: 6 prospects per run → `prospect_facts` and a full page file in `page_drafts` (status `ready`) | Claude (fresh session) |
+| 01:00 | This Worker crawls everything pending; briefs by ~02:00 | Apify + Workers |
+| 01:53–05:53, hourly | Scheduled gap-fill session: 6 prospects per run → `prospect_facts` and a full page file in `page_drafts` (status `ready`) | Claude (fresh session) |
+| 06:30 | This Worker downloads the photos of ready drafts into R2 | Workers |
+| 07:03 | Scheduled staging session: ready drafts → `staging` branch, Teams list of preview links | Claude (fresh session) |
+| 07:30 | Watchdog: crawl failed, or ready pages not staged | Workers |
 | When you like | `python3 tools/pull_pages.py --site <saltatlas-website>` on a computer with internet: downloads the photos to WebP, builds the pages, marks drafts `built` | Free |
 
 Every session logs its estimated cost to `cost_ledger`.

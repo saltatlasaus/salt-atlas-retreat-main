@@ -1,8 +1,8 @@
 // Salt Atlas crawl Worker: entry points.
 //
-//   Cron 05:00 UTC   start today's crawl workflow (pages the scout logged the day before)
-//   Cron 09:00 UTC   watchdog: alert if today's crawl failed or never ran
-//   Cron 11:05 UTC   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
+//   Cron 01:00 UTC   start today's crawl workflow (pages the scout logged the day before)
+//   Cron 06:30 UTC   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
+//   Cron 07:30 UTC   watchdog: alert if today's crawl failed, or ready pages weren't staged at 07:03
 //   POST /apify/webhook          Apify says a run finished (wakes the workflow early)
 //   GET  /health                 liveness check
 //   Admin (Authorization: Bearer ADMIN_TOKEN):
@@ -169,11 +169,11 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const batch = today(new Date(controller.scheduledTime));
-    if (controller.cron === '0 9 * * *') {
+    if (controller.cron === CRON_WATCHDOG) {
       ctx.waitUntil(watchdog(env, batch));
       return;
     }
-    if (controller.cron === '5 11 * * *') {
+    if (controller.cron === CRON_PHOTOS) {
       ctx.waitUntil(
         mirrorPhotos(env).then(
           (r) => logEvent(env.DB, `photos-${batch}`, 'photos_mirrored', r),
@@ -191,7 +191,11 @@ export default {
   },
 };
 
-/** Evening check: tell a person if today's crawl failed or never started while work is waiting. */
+// Must match "triggers.crons" in wrangler.jsonc (all UTC). Any other cron starts the crawl (01:00).
+export const CRON_PHOTOS = '30 6 * * *';
+export const CRON_WATCHDOG = '30 7 * * *';
+
+/** Morning check before the 9am review: today's crawl, and pages that should have been staged at 07:03 but weren't. */
 async function watchdog(env: Env, batch: string): Promise<void> {
   let state = 'missing';
   try {
@@ -199,13 +203,22 @@ async function watchdog(env: Env, batch: string): Promise<void> {
   } catch {
     /* no instance */
   }
-  if (state === 'complete' || state === 'running' || state === 'waiting') return;
+  const crawlOk = state === 'complete' || state === 'running' || state === 'waiting';
   const waiting = await env.DB
     .prepare(`SELECT count(*) AS n FROM sources WHERE tag = 'operator' AND crawl_status = 'pending'`)
     .first<{ n: number }>();
-  if ((waiting?.n ?? 0) === 0 && state === 'missing') return;
-  await postToTeams(env, `⚠️ Crawl ${batch} needs a look`, [['Workflow state', state], ['Pages waiting', String(waiting?.n ?? 0)]], true,
-    `Check GET /admin/status?date=${batch}, then restart with POST /admin/crawl?date=${batch}&force=1`);
+  if (!crawlOk && !((waiting?.n ?? 0) === 0 && state === 'missing')) {
+    await postToTeams(env, `⚠️ Crawl ${batch} needs a look`, [['Workflow state', state], ['Pages waiting', String(waiting?.n ?? 0)]], true,
+      `Check GET /admin/status?date=${batch}, then restart with POST /admin/crawl?date=${batch}&force=1`);
+  }
+  // Drafts that were ready before the 07:03 staging run but are still not staged: the staging session failed or never ran.
+  const unstaged = await env.DB
+    .prepare(`SELECT count(*) AS n FROM page_drafts WHERE status = 'ready' AND kit_json <> '{}' AND updated_at < datetime('now', '-30 minutes')`)
+    .first<{ n: number }>();
+  if ((unstaged?.n ?? 0) > 0) {
+    await postToTeams(env, `⚠️ ${unstaged?.n} page${unstaged?.n === 1 ? '' : 's'} not staged ${batch}`, [['Ready, not staged', String(unstaged?.n)]], true,
+      'The 07:03 staging session failed or never ran. Check the scheduled task "Salt Atlas stage destination pages".');
+  }
 }
 
 // Minimal runtime types (the real ones come from @cloudflare/workers-types when installed).
