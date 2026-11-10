@@ -1,7 +1,7 @@
 // Salt Atlas crawl Worker: entry points.
 //
-//   Cron 15:00 UTC   start today's crawl workflow (after the 07:00 and 13:00 UK scout runs)
-//   Cron 21:00 UTC   watchdog: alert if today's crawl failed or never ran
+//   Cron 05:00 UTC   start today's crawl workflow (pages the scout logged the day before)
+//   Cron 09:00 UTC   watchdog: alert if today's crawl failed or never ran
 //   POST /apify/webhook          Apify says a run finished (wakes the workflow early)
 //   GET  /health                 liveness check
 //   Admin (Authorization: Bearer ADMIN_TOKEN):
@@ -166,7 +166,7 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const batch = today(new Date(controller.scheduledTime));
-    if (controller.cron === '0 21 * * *') {
+    if (controller.cron === '0 9 * * *') {
       ctx.waitUntil(watchdog(env, batch));
       return;
     }
