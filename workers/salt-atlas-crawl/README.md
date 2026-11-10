@@ -134,3 +134,16 @@ fallbacks and JSON-LD (where many sites put contacts, address and photos) instea
 npm test          # node --test test/*.test.ts (Node 22+, no install needed)
 npm run typecheck # needs npm install
 ```
+
+## Verified facts (after gap filling)
+
+`prospect_facts` holds one row per fact per resort, keyed by the app's template fields
+(`break`, `season`, `level`, `rooms`, `capacity`, `price7`, `inclusions`, `meals`, `airport`, `transfer`, …,
+plus `whatsapp`, `phone`, `trip_length`, `deposit`, `schedule`, `status`). Each row has a status
+(`verified`, `single`, `conflict`, `needs_confirmation`, `missing`), where it came from
+(`operator`, `public`, `agent`), the source link and the exact quote. Applied as migration `0101_prospect_facts.sql`.
+
+```sql
+SELECT field_key, value, status, source_type, source_url FROM prospect_facts WHERE prospect_id = 'tengirri.com' ORDER BY field_key;
+SELECT * FROM v_prospect_fact_sheet WHERE prospect_id = 'tengirri.com';
+```
