@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cleanEmail, decodeCfEmail, dedupeContacts, extractFromText, normalisePhone, whatsappFromHref } from '../src/contacts.ts';
+import { cleanEmail, decodeCfEmail, dedupeContacts, extractFromLinks, extractFromText, normalisePhone, whatsappFromHref } from '../src/contacts.ts';
 import { decodeEntities, htmlToText, parseAttrs, scanHtml } from '../src/html.ts';
 import { canonicalKey, isJunkImage, parseSrcset, sectionFor, upgradeImageUrl } from '../src/images.ts';
 import { imageSize } from '../src/sniff.ts';
-import { extractAirports, extractCapacity, extractDurations, extractPrices, pageHealth, parseAmount, parseJsonLd, splitSections } from '../src/text.ts';
+import { extractAirports, extractCapacity, extractDurations, extractPrices, extractWaveNames, pageHealth, parseAmount, parseJsonLd, splitSections } from '../src/text.ts';
 import { interleaveByDomain, isHomePath, looseKey, matchKey, rootDomain } from '../src/urls.ts';
 
 test('matchKey ignores scheme, www, trailing slash, fragment and tracking params', () => {
@@ -239,4 +239,48 @@ test('capacity: number words, describing words, no distance false positives', ()
   assert.ok(c.some((x) => x.startsWith('max 12 guests')), c.join(' | '));
   assert.ok(c.some((x) => x.startsWith('6 cabins')), c.join(' | '));
   assert.ok(!c.some((x) => x.startsWith('10 rooms')), c.join(' | '));
+});
+
+// Regressions from the first live crawl (Aloita, 10 Nov 2026).
+test('plain English is never read as an email address', () => {
+  const text = 'Surf when you want to surf at all. Most guests stay a week. Tricky at times. It is hard. Stay at Aloita. The best experience at Aloita. We get busy. Nothing at all. Experiences';
+  const found = extractFromText(text, 'aloitaresort.com', 'Indonesia').filter((c) => c.kind === 'email');
+  assert.deepEqual(found, []);
+  const real = extractFromText('Write to bookings [at] aloitaresort.com or info at aloitaresort dot com', 'aloitaresort.com', 'Indonesia').filter((c) => c.kind === 'email').map((c) => c.value).sort();
+  assert.deepEqual(real, ['bookings@aloitaresort.com', 'info@aloitaresort.com']);
+});
+
+test('capacity ignores words that merely start with a number word', () => {
+  const c = extractCapacity('cherished memories for you and your loved ones surfing EXPERIENCES luxury villas. Ten absolute beachfront villas.');
+  assert.ok(!c.some((x) => x.startsWith('1 villas')), c.join(' | '));
+  assert.ok(c.some((x) => x.startsWith('10 villas')), c.join(' | '));
+});
+
+test('wave names: no eyebrows, months, sentences or case duplicates', () => {
+  const names = extractWaveNames([], ['SURF · MENTAWAI ISLANDS', 'Tikus.', 'Scarecrows.', 'SCARECROWS', "G4's", 'G4’S', 'May to September', 'The Mentawais receive waves year-round.', 'Ombak Tidur.', 'OMBAK TIDUR', 'Suicides Left.'].map((text) => ({ level: 3, text })));
+  assert.deepEqual(names, ['Tikus', 'Scarecrows', "G4's", 'Ombak Tidur', 'Suicides Left']);
+});
+
+test('cookie banner text is dropped from page sections', () => {
+  const s = splitSections('Aloita Resort - Beachfront Mentawai Resort We value your privacy We use cookies to enhance your browsing experience. By clicking "Accept All", you consent to our use of cookies. Customise Reject All Accept All Powered by\n## Wake up steps from the ocean.\nEvery villa at Aloita is designed around island living.');
+  assert.ok(!/cookie|Accept All|privacy/i.test(s.map((x) => x.text).join(' ')), JSON.stringify(s));
+  assert.ok(s.some((x) => /Every villa/.test(x.text)));
+});
+
+test('regressions from the other live briefs', () => {
+  // one price, not two
+  const p = extractPrices('In order to confirm your spot, a $8,000.00 USD NON-REFUNDABLE deposit. Surfing Tax ($140 USD per person).');
+  assert.deepEqual(p.map((x) => `${x.currency} ${x.amount} ${x.unit ?? ''}`.trim()), ['USD 8000', 'USD 140 per person']);
+  // "eight surfers across six cabins" is 6 cabins, not 8
+  const c = extractCapacity('With room for eight surfers across six cabins, everyone has their own bed.');
+  assert.ok(!c.some((x) => x.startsWith('8 cabins')), c.join(' | '));
+  // booking-terms headings are not breaks
+  const w = extractWaveNames([], ['2027 SCHEDULE', 'Terms and Conditions', 'What’s Included', 'Skill Level', 'Hide Filters', 'Macaronis', "Lance's Right (Hollow tree's)"].map((text) => ({ level: 3, text })));
+  assert.deepEqual(w, ['Macaronis', "Lance's Right (Hollow tree's)"]);
+});
+
+test('map embeds are not review links; place links are', () => {
+  const doc = scanHtml('<a href="https://maps.google.com/maps?ll=-2.37,99.84&z=12">map</a><a href="https://www.google.com/maps/place/Kingfisher+Resort/@-2.37,99.84">reviews</a>', 'https://kingfisher-mentawai.com/');
+  const f = extractFromLinks(doc, 'https://kingfisher-mentawai.com/', 'kingfisher-mentawai.com', 'Indonesia');
+  assert.deepEqual(f.reviewLinks, ['https://www.google.com/maps/place/Kingfisher+Resort/@-2.37,99.84']);
 });

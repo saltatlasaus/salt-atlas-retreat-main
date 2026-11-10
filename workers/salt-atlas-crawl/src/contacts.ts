@@ -16,7 +16,10 @@ export function decodeCfEmail(hex: string): string | null {
 }
 
 const EMAIL_RE = /[a-z0-9][a-z0-9._%+-]{0,63}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,24}/gi;
-const OBFUSCATED_RE = /([a-z0-9._%+-]{2,64})\s*(?:\[at\]|\(at\)|\{at\}|\sat\s)\s*([a-z0-9-]{2,63}(?:\s*(?:\[dot\]|\(dot\)|\{dot\}|\sdot\s|\.)\s*[a-z0-9-]{2,63}){1,3})/gi;
+// Obfuscated emails need an explicit marker. Plain English ("surf at all. Most") must never become an
+// address, so a bare " at " only counts together with a spelled-out " dot " ("info at resort dot com").
+const OBFUSCATED_RE = /([a-z0-9._%+-]{2,64})\s*(?:\[at\]|\(at\)|\{at\}|\[@\]|\(@\))\s*([a-z0-9-]{2,63}(?:\s*(?:\[dot\]|\(dot\)|\{dot\}|\sdot\s|\.)\s*[a-z0-9-]{2,63}){1,3})/gi;
+const SPOKEN_EMAIL_RE = /\b([a-z0-9._%+-]{2,64})\s+at\s+([a-z0-9-]{2,63}(?:\s+dot\s+[a-z0-9-]{2,24}){1,3})\b/gi;
 const JUNK_EMAIL = /(\.(png|jpe?g|gif|webp|svg|avif|css|js)$|example\.|@sentry|sentry\.|wixpress\.com|@domain\.|@email\.|@yourdomain|@yoursite|yourname@|name@|user@|test@|@test\.|no-?reply@|donotreply@|@2x|@3x|godaddy\.com|@mysite\.|cloudflare\.com|schema\.org|@u\.)/i;
 
 export function cleanEmail(e: string): string | null {
@@ -150,8 +153,11 @@ export function extractFromLinks(doc: RawDoc, pageUrl: string, prospectDomain: s
       continue;
     }
     const full = host + u.pathname;
-    if (REVIEW_HOSTS.test(full) && !out.reviewLinks.includes(u.toString())) out.reviewLinks.push(u.toString());
-    if (rootDomain(host) !== site && BOOKING_ENGINES.test(full) && !out.bookingLinks.includes(u.toString())) out.bookingLinks.push(u.toString());
+    // A map embed (just coordinates) is not a review listing; a Google place link is.
+    const mapOnly = /google\.[a-z.]+\/maps|maps\.google\./i.test(full) && !/\/place\/|[?&]cid=|[?&]q=place_id|ftid=/i.test(full);
+    if (REVIEW_HOSTS.test(full) && !mapOnly && !out.reviewLinks.includes(u.toString())) out.reviewLinks.push(u.toString());
+    const vendorHome = (u.pathname === '/' || u.pathname === '') && !u.search;
+    if (rootDomain(host) !== site && !vendorHome && BOOKING_ENGINES.test(full) && !out.bookingLinks.includes(u.toString())) out.bookingLinks.push(u.toString());
     if (/vimeo\.com\/\d+/.test(full)) out.videos.push(u.toString());
     if (/\.pdf$/i.test(u.pathname) && !out.documents.includes(u.toString())) out.documents.push(u.toString());
   }
@@ -181,7 +187,7 @@ export function extractFromText(text: string, prospectDomain: string, country: s
     const e = cleanEmail(m[0]);
     if (e) out.push({ kind: 'email', value: e, evidence: 'text', sameDomain: rootDomain(e.split('@')[1]) === site });
   }
-  for (const m of text.matchAll(OBFUSCATED_RE)) {
+  for (const m of [...text.matchAll(OBFUSCATED_RE), ...text.matchAll(SPOKEN_EMAIL_RE)]) {
     const domain = m[2].replace(/\s*(\[dot\]|\(dot\)|\{dot\}|\sdot\s|\.)\s*/gi, '.');
     const e = cleanEmail(`${m[1]}@${domain}`);
     if (e && /\.[a-z]{2,24}$/.test(e)) out.push({ kind: 'email', value: e, evidence: 'obfuscated', sameDomain: rootDomain(domain) === site });

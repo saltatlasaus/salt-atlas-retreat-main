@@ -2,7 +2,7 @@
 // crawl found, with the source page for every fact. Claude reads this instead of raw
 // pages. Target size is about 10–14 KB (a few thousand tokens) however big the site is.
 
-import type { D1Database, PageExtract, R2Bucket } from './types.ts';
+import type { D1Database, PageExtract, R2Bucket, PriceFound } from './types.ts';
 
 export interface BriefInput {
   prospect: { id: string; name: string; country: string | null; region: string | null; type: string | null; website: string | null };
@@ -68,7 +68,12 @@ export function renderBrief(input: BriefInput, budget = 14000): { markdown: stri
   const bookingLinks = new Set<string>();
   for (const pg of ok) {
     Object.assign(socials, { ...pg.extract!.socials, ...socials });
-    pg.extract!.reviewLinks.forEach((r) => reviewLinks.add(r));
+    pg.extract!.reviewLinks.forEach((r) => {
+      // One link per listing: TripAdvisor review permalinks share the property's "-d<id>-".
+      const id = /tripadvisor\.[a-z.]+\/.*?-d(\d+)-/i.exec(r)?.[1];
+      if (id && [...reviewLinks].some((x) => x.includes(`-d${id}-`))) return;
+      reviewLinks.add(r);
+    });
     pg.extract!.bookingLinks.forEach((r) => bookingLinks.add(r));
   }
   const otherSocial = Object.entries(socials).filter(([k]) => k !== 'instagram' && k !== 'facebook');
@@ -89,14 +94,31 @@ export function renderBrief(input: BriefInput, budget = 14000): { markdown: stri
   }
 
   // Prices, capacity, transfer times
-  const prices = ok.flatMap((x) => x.extract!.prices.map((pr) => ({ ...pr, page: path(x.url) })));
+  // The same offer often repeats in a site-wide banner: list it once, with how many pages show it.
+  const priceMap = new Map<string, { pr: PriceFound; page: string; pages: number }>();
+  for (const x of ok) {
+    for (const pr of x.extract!.prices) {
+      const key = `${pr.currency}|${pr.amount}|${pr.unit ?? ''}`;
+      const cur = priceMap.get(key);
+      if (cur) cur.pages++;
+      else priceMap.set(key, { pr, page: path(x.url), pages: 1 });
+    }
+  }
+  const prices = [...priceMap.values()].map((v) => ({ ...v.pr, page: v.page, pages: v.pages }));
   if (prices.length) {
     L.push('\n## Prices on the site (raw, unverified)');
     for (const pr of prices.slice(0, 12)) {
-      L.push(`- ${pr.raw}${pr.unit ? ` — ${pr.unit}` : ''} (${pr.page}): "${clip(pr.context, 150)}"`);
+      const also = pr.pages > 1 ? `, also on ${pr.pages - 1} other page${pr.pages > 2 ? 's' : ''}` : '';
+      L.push(`- ${pr.raw}${pr.unit ? ` — ${pr.unit}` : ''} (${pr.page}${also}): "${clip(pr.context, 150)}"`);
     }
   }
-  const capacity = [...new Set(ok.flatMap((x) => x.extract!.capacity))];
+  const capSeen = new Set<string>();
+  const capacity = ok.flatMap((x) => x.extract!.capacity).filter((c) => {
+    const fact = c.split(' — ')[0];
+    if (capSeen.has(fact)) return false;
+    capSeen.add(fact);
+    return true;
+  });
   const durations = [...new Set(ok.flatMap((x) => x.extract!.durations))];
   if (capacity.length || durations.length) {
     L.push('\n## Capacity and transfer times');

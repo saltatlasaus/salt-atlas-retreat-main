@@ -18,8 +18,18 @@ export function mdToPlain(md: string): string {
 }
 
 /** Split markdown into heading-led sections (H1–H4). Text before the first heading becomes "Intro". */
+const CONSENT_LINE = /we value your privacy|we use cookies|use of cookies|cookie (policy|settings|preferences|consent)|accept all|reject all|customi[sz]e (cookies|consent|preferences)|powered by (cookieyes|cookiebot|onetrust|complianz)|manage (cookies|consent)/i;
+
+/** Drop cookie and consent banner text that survived the crawler's own cookie removal. */
+export function stripConsent(md: string): string {
+  return md
+    .split(/\r?\n/)
+    .map((line) => (CONSENT_LINE.test(line) && line.length < 600 ? line.split(/(?<=[.!?])\s+/).filter((x) => !CONSENT_LINE.test(x)).join(' ').replace(/\b(Customise|Customize|Reject All|Accept All|Powered by\s*\S*)\b/gi, '').trim() : line))
+    .join('\n');
+}
+
 export function splitSections(md: string, maxText = 1200): Section[] {
-  const lines = md.split(/\r?\n/);
+  const lines = stripConsent(md).split(/\r?\n/);
   const out: Section[] = [];
   let cur: Section = { heading: 'Intro', level: 0, text: '' };
   const flush = () => {
@@ -92,7 +102,12 @@ function unitFor(context: string): string | null {
 export function extractPrices(text: string, max = 25): PriceFound[] {
   const found: PriceFound[] = [];
   const seen = new Set<string>();
+  const taken: [number, number][] = [];
   const push = (raw: string, cur: string, amt: string, k: boolean, at: number) => {
+    // "$8,000.00 USD" matches both "$8,000.00" and "8,000.00 USD": one price, not two.
+    const end = at + raw.length;
+    if (taken.some(([a, b]) => at < b && end > a)) return;
+    taken.push([at, end]);
     const code = currencyCode(cur);
     let amount = parseAmount(amt);
     if (!code || amount == null) return;
@@ -110,8 +125,9 @@ export function extractPrices(text: string, max = 25): PriceFound[] {
     seen.add(key);
     found.push({ amount, currency: code, raw: raw.trim(), unit, context });
   };
-  for (const m of text.matchAll(PRICE_BEFORE)) push(m[0], m[1], m[2], Boolean(m[3]), m.index ?? 0);
+  // Explicit codes after the number ("8,000 USD") are clearer than a bare "$", so they go first.
   for (const m of text.matchAll(PRICE_AFTER)) push(m[0], m[2], m[1], false, m.index ?? 0);
+  for (const m of text.matchAll(PRICE_BEFORE)) push(m[0], m[1], m[2], Boolean(m[3]), m.index ?? 0);
   return found.slice(0, max);
 }
 
@@ -120,10 +136,10 @@ const NUMBER_WORDS: Record<string, number> = {
   eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
   eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40,
 };
-const NUM = `(\\d{1,3}|${Object.keys(NUMBER_WORDS).join('|')})`;
+const NUM = `(\\d{1,3}|${Object.keys(NUMBER_WORDS).join('|')})\\b`;
 // Up to 4 describing words: "three traditional style luxury beachfront bungalows", "6 air-conditioned cabins".
 // Words that signal a distance or time ("10 minutes from the rooms") stop the match.
-const CAP_STOP = 'from|to|away|walk|walking|min|mins|minutes?|hours?|hrs?|metres?|meters?|km|miles?|steps|days?|nights?|weeks?|years?|per|of|between|in|at|near';
+const CAP_STOP = `from|to|away|walk|walking|min|mins|minutes?|hours?|hrs?|metres?|meters?|km|miles?|steps|days?|nights?|weeks?|years?|per|of|between|in|at|near|across|for|with|and|or|guests?|surfers?|people|persons|pax|adults|${Object.keys(NUMBER_WORDS).join('|')}`;
 const CAP_ADJ = `(?:(?:(?!(?:${CAP_STOP})\\b)[a-z-]+\\s+){0,4})`;
 const CAPACITY_RES: [RegExp, string][] = [
   [new RegExp(`\\b(?:max(?:imum)?|up to|sleeps|accommodates?|capacity(?: of)?|limited to|only|no more than)\\s*(?:of\\s*)?${NUM}\\s*(guests|surfers|people|pax|persons|adults|riders)\\b`, 'gi'), 'max'],
@@ -198,9 +214,13 @@ export function extractAirports(text: string): string[] {
 
 const GENERIC_HEADINGS = /^(the\s+)?(waves?|surf(ing)?|breaks?|surf (breaks|spots|guide|report|season)|our waves|spots|the breaks|faq|faqs|contact( us)?|book( now)?|enquire|about( us)?|home|menu|gallery|photos|reviews?|testimonials|rates|prices|pricing|location|getting here|news|blog|follow us|subscribe|newsletter|instagram|map|intro)$/i;
 
+// Words that mark page furniture or marketing, not a break name.
+const NOT_WAVE_WORDS = /\b(schedule|terms|conditions|included|filters?|direction|type|skill|level|guide|options|famous|paradise|reality|dream|holiday|booking|book|rates?|prices?|faq|enquire|contact|menu|gallery|reviews?|testimonials?|news|blog|resort|accommodation|packages?|more|ultimate|welcome|explore|discover)\b/i;
+
 /** Candidate break names: short headings on a waves page. Claude confirms them; we never assert. */
 export function extractWaveNames(sections: Section[], headings: { level: number; text: string }[]): string[] {
   const names = new Set<string>();
+  const seen = new Set<string>();
   const pool = [...headings.map((h) => h.text), ...sections.filter((s) => s.level >= 2).map((s) => s.heading)];
   for (const raw of pool) {
     const t = raw.replace(/^\d+\s*[.·)\-–:]\s*/, '').replace(/[“”"]/g, '').trim();
@@ -208,7 +228,16 @@ export function extractWaveNames(sections: Section[], headings: { level: number;
     if (GENERIC_HEADINGS.test(t)) continue;
     if (t.split(/\s+/).length > 5) continue;
     if (/[?!]$/.test(t)) continue;
-    names.add(t);
+    if (/·|\|/.test(t)) continue; // eyebrow labels like "SURF · MENTAWAI ISLANDS"
+    if (/\b(19|20)\d\d\b/.test(t)) continue; // "2027 SCHEDULE"
+    if (NOT_WAVE_WORDS.test(t)) continue;
+    if (/\b(january|february|march|april|may|june|july|august|september|october|november|december|year-round|season)\b/i.test(t)) continue;
+    if (/\.$/.test(t) && t.split(/\s+/).length > 2) continue; // a sentence, not a name
+    const name = t.replace(/[.,:;]+$/, '').replace(/[’']s$/i, "'s").trim();
+    const key = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    names.add(/^[A-Z0-9'’\s.-]+$/.test(name) && name.length > 3 ? name.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) : name);
   }
   return [...names].slice(0, 40);
 }
