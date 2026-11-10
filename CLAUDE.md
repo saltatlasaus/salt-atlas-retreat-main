@@ -13,7 +13,7 @@ resorts, crawls their websites, verifies facts and generates destination pages f
 | `src/routes/` | Pages: `/ops`, `/pipeline`, `/scrape`, `/research`, `/studio`, `/discover` |
 | `drizzle/` | The app's D1 migrations |
 | `workers/salt-atlas-crawl/` | **Separate** Worker: daily capped Apify crawl + code parsing → one brief per resort (`prospects.brief_md`). Own `package.json`, `wrangler.jsonc`, migrations and tests; see its `README.md` |
-| `docs/` | `HANDOVER.md`, `AGENT_PIPELINE.md` |
+| `docs/` | `HANDOVER.md`, `AGENT_PIPELINE.md`, `CRAWL_ALIGNMENT.md` (plan to merge the two pipelines) |
 
 ## Two pipelines, one database (important)
 
@@ -23,7 +23,7 @@ Both Workers use the same D1 database (`salt-atlas-scrape`) and R2 bucket (`salt
 - **Crawl Worker / scout** tables: `runs`, `prospects`, `sources`, `contacts`, `reviews`, `images`,
   `documents`, `crawl_runs`, `exclusions`, `region_queue`, `run_log`. R2 prefixes `crawl/`, `briefs/`, `docs/`.
 
-They do not read each other's tables yet. **Direction:** the app is where this work should end up.
+They do not read each other's tables yet; the phased plan is in `docs/CRAWL_ALIGNMENT.md`. **Direction:** the app is where this work should end up.
 The crawl Worker is meant to become the app's crawl-and-pre-extract stage (cheap code extraction
 before any Claude call), not a permanent parallel system. When changing either side, keep the two
 compatible and don't duplicate a stage the other already does; flag overlaps instead of building around them.
