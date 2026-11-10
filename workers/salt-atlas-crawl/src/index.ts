@@ -2,7 +2,7 @@
 //
 //   Cron 01:00 UTC   start today's crawl workflow (pages the scout logged the day before)
 //   Cron 06:30 UTC   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
-//   Cron 07:30 UTC   watchdog: alert if today's crawl failed, or ready pages weren't staged at 07:03
+//   Cron 07:30 UTC   watchdog: alert if today's crawl failed, ready pages weren't staged at 07:03, or resort sites refused photos
 //   POST /apify/webhook          Apify says a run finished (wakes the workflow early)
 //   GET  /health                 liveness check
 //   Admin (Authorization: Bearer ADMIN_TOKEN):
@@ -15,7 +15,7 @@
 import { buildBrief } from './brief.ts';
 import { logEvent, pageStatements } from './db.ts';
 import { postToTeams } from './notify.ts';
-import { mirrorPhotos, servePhoto } from './photos.ts';
+import { mirrorPhotos, refusedPhotos, servePhoto } from './photos.ts';
 import { processPage } from './process.ts';
 import type { BatchSource, Env, PageExtract } from './types.ts';
 import { CrawlWorkflow } from './workflow.ts';
@@ -224,6 +224,13 @@ async function watchdog(env: Env, batch: string): Promise<void> {
   if ((unstaged?.n ?? 0) > 0) {
     await postToTeams(env, `⚠️ ${unstaged?.n} page${unstaged?.n === 1 ? '' : 's'} not staged ${batch}`, [['Ready, not staged', String(unstaged?.n)]], true,
       'The 07:03 staging session failed or never ran. Check the scheduled task "Salt Atlas stage destination pages".');
+  }
+  // Photos a resort's site refused this morning: the page links to the resort's own copy until they're fetched.
+  const refused = await refusedPhotos(env.DB);
+  if (refused.length) {
+    await postToTeams(env, `📷 Photos refused by ${refused.length} resort site${refused.length === 1 ? '' : 's'}`,
+      refused.map((r): [string, string] => [r.prospect_id, `${r.n} photo${r.n === 1 ? '' : 's'}`]), false,
+      'Retried automatically for up to 3 mornings. To fetch them now, run python3 tools/fetch_failed_photos.py in the salt-atlas-crawl folder on your computer.');
   }
 }
 

@@ -72,6 +72,7 @@ curl -H "$H" "$W/admin/status?date=2026-11-11"                 # workflow state 
 curl -H "$H" "$W/admin/brief?prospect=tengirri.com"            # the brief as Claude sees it
 curl -X POST -H "$H" "$W/admin/reparse?prospect=tengirri.com"  # re-parse stored HTML, no Apify cost
 curl -X POST -H "$H" "$W/admin/photos"                         # run the 06:30 photo download now (skips photos already copied)
+python3 tools/fetch_failed_photos.py                           # on your computer: fetch photos a resort site refused the Worker
 npx wrangler tail                                              # live logs
 ```
 
@@ -156,9 +157,9 @@ SELECT * FROM v_prospect_fact_sheet WHERE prospect_id = 'tengirri.com';
 | 12:47 and 19:47 | Scheduled scout session: up to 15 prospects each, logged to `prospects` / `sources` | Claude (fresh session) |
 | 01:00 | This Worker crawls everything pending; briefs by ~02:00 | Apify + Workers |
 | 01:53–05:53, hourly | Scheduled gap-fill session: 6 prospects per run → `prospect_facts` and a full page file in `page_drafts` (status `ready`) | Claude (fresh session) |
-| 06:30 | This Worker downloads the photos of ready drafts into R2 | Workers |
+| 06:30 | This Worker downloads the photos of ready drafts into R2. Photos a resort site refuses are retried on the next mornings (up to 3 tries) | Workers |
 | 07:03 | Scheduled staging session: ready drafts → `staging` branch, Teams list of preview links | Claude (fresh session) |
-| 07:30 | Watchdog: crawl failed, or ready pages not staged | Workers |
+| 07:30 | Watchdog: crawl failed, ready pages not staged, or photos refused by a resort site | Workers |
 | When you like | `python3 tools/pull_pages.py --site <saltatlas-website>` on a computer with internet: downloads the photos to WebP, builds the pages, marks drafts `built` | Free |
 
 Every session logs its estimated cost to `cost_ledger`.

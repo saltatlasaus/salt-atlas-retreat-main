@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mirrorPhotos, photoKey, photoUrls, servePhoto } from '../src/photos.ts';
+import { MAX_ATTEMPTS, mirrorPhotos, photoKey, photoUrls, refusedPhotos, servePhoto } from '../src/photos.ts';
 import type { Env } from '../src/types.ts';
 import { FakeD1, FakeR2 } from './fakes.ts';
 
@@ -25,7 +25,17 @@ test('mirror copies each photo once, records failures, and serves the copy', asy
   }) as typeof fetch;
   assert.deepEqual(await mirrorPhotos(env), { fetched: 1, failed: 1, skipped: 0 });
   assert.equal(calls, 2);
-  assert.deepEqual(await mirrorPhotos(env), { fetched: 0, failed: 0, skipped: 2 }, 'nothing fetched twice');
+  assert.deepEqual(await mirrorPhotos(env), { fetched: 0, failed: 0, skipped: 2 }, 'nothing fetched twice the same day');
+  assert.deepEqual(await refusedPhotos(db), [{ prospect_id: 't.com', n: 1 }], 'the refused photo is flagged');
+  // Next morning: the refused photo is tried again (also once the draft is staged), until MAX_ATTEMPTS.
+  db.db.exec(`UPDATE page_drafts SET status = 'built'`);
+  for (let day = 2; day <= MAX_ATTEMPTS + 1; day++) {
+    db.db.exec(`UPDATE photo_mirror SET fetched_at = datetime('now', '-1 day')`);
+    const r = await mirrorPhotos(env);
+    assert.equal(r.failed, day <= MAX_ATTEMPTS ? 1 : 0, `day ${day}`);
+  }
+  assert.equal(db.rows(`SELECT attempts FROM photo_mirror WHERE status = 'failed'`)[0]?.attempts, MAX_ATTEMPTS);
+  assert.equal(calls, 2 + MAX_ATTEMPTS - 1, 'the good photo is never fetched again');
   const rows = db.rows(`SELECT status, error FROM photo_mirror ORDER BY status`);
   assert.deepEqual(rows.map((r) => r.status), ['failed', 'ok']);
   const key = await photoKey('https://t.com/ok.jpg');
