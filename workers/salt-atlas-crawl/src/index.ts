@@ -158,6 +158,12 @@ export default {
             : json({ error: 'no brief yet' }, 404);
         }
         if (url.pathname === '/admin/reparse' && req.method === 'POST' && prospect) return json(await reparse(env, prospect));
+        // Run the 06:30 photo download now (photos of ready page drafts into R2). Safe to repeat: copied photos are skipped.
+        if (url.pathname === '/admin/photos' && req.method === 'POST') {
+          const r = await mirrorPhotos(env);
+          await logEvent(env.DB, `photos-${date}`, 'photos_mirrored', r);
+          return json(r);
+        }
       } catch (e) {
         return json({ error: e instanceof Error ? e.message : String(e) }, 500);
       }

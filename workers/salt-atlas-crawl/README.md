@@ -71,6 +71,7 @@ curl -X POST -H "$H" "$W/admin/crawl?date=2026-11-11&force=1"  # start a fresh r
 curl -H "$H" "$W/admin/status?date=2026-11-11"                 # workflow state + page counts
 curl -H "$H" "$W/admin/brief?prospect=tengirri.com"            # the brief as Claude sees it
 curl -X POST -H "$H" "$W/admin/reparse?prospect=tengirri.com"  # re-parse stored HTML, no Apify cost
+curl -X POST -H "$H" "$W/admin/photos"                         # run the 06:30 photo download now (skips photos already copied)
 npx wrangler tail                                              # live logs
 ```
 
