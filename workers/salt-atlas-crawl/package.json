@@ -1,0 +1,23 @@
+{
+  "name": "salt-atlas-crawl",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Daily Apify crawl, parsing and prospect briefs for Salt Atlas (Cloudflare Worker + Workflow)",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "migrate": "wrangler d1 migrations apply salt-atlas-scrape --remote",
+    "tail": "wrangler tail salt-atlas-crawl"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "latest",
+    "wrangler": "latest"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

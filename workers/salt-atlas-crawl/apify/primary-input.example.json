@@ -1,0 +1,39 @@
+{
+  "startUrls": [
+    {
+      "url": "https://example-resort.com/"
+    },
+    {
+      "url": "https://example-resort.com/rooms/"
+    }
+  ],
+  "crawlerType": "playwright:adaptive",
+  "maxCrawlDepth": 0,
+  "maxCrawlPages": 12,
+  "maxResults": 24,
+  "useSitemaps": false,
+  "useLlmsTxt": false,
+  "respectRobotsTxtFile": true,
+  "ignoreCanonicalUrl": true,
+  "keepUrlFragments": false,
+  "maxConcurrency": 5,
+  "maxRequestRetries": 2,
+  "requestTimeoutSecs": 90,
+  "dynamicContentWaitSecs": 15,
+  "maxScrollHeightPixels": 8000,
+  "removeCookieWarnings": true,
+  "blockMedia": false,
+  "expandIframes": true,
+  "clickElementsCssSelector": "[aria-expanded=\"false\"]",
+  "removeElementsCssSelector": "nav, style, svg, img[src^='data:'], script:not([type='application/ld+json']), [role='dialog'], [role='alertdialog'], [aria-modal='true']",
+  "htmlTransformer": "none",
+  "saveMarkdown": true,
+  "saveHtmlAsFile": true,
+  "saveContentTypes": "application/pdf",
+  "saveScreenshots": false,
+  "storeSkippedUrls": true,
+  "debugMode": false,
+  "proxyConfiguration": {
+    "useApifyProxy": true
+  }
+}

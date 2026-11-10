@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "salt-atlas-crawl",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+
+  // Workers Paid is required: the free plan allows 10 ms CPU per invocation, far too little for parsing.
+  "limits": { "cpu_ms": 120000 },
+
+  // All UTC, so the order holds through the clock change. Pages are staged by ~07:15 UTC (08:15 in summer), ready for a 9am review.
+  // 01:00 crawl (briefs by ~02:00, before the 01:53 to 05:53 gap fill). 06:30 photo download. 07:30 watchdog (after 07:03 staging).
+  "triggers": { "crons": ["0 1 * * *", "30 6 * * *", "30 7 * * *"] },
+
+  "workflows": [
+    { "name": "salt-atlas-crawl", "binding": "CRAWL", "class_name": "CrawlWorkflow" }
+  ],
+
+  // Same database and bucket as the app (binding names match the app's DB / SCRAPE_BUCKET).
+  "d1_databases": [
+    { "binding": "DB", "database_name": "salt-atlas-scrape", "database_id": "6f0007ea-1ac1-4ceb-ae3d-24b204fbca2a", "migrations_dir": "migrations" }
+  ],
+  "r2_buckets": [{ "binding": "SCRAPE_BUCKET", "bucket_name": "salt-atlas-scrape" }],
+
+  "vars": {
+    // The Worker's own URL (Apify calls back here)
+    "PUBLIC_URL": "https://salt-atlas-crawl.accounts-c6e.workers.dev",
+    "APIFY_ACTOR": "apify~website-content-crawler",
+    "APIFY_MEMORY_MB": "4096",
+    "APIFY_TIMEOUT_SECS": "3600",
+    // Hard cap on what one Apify run may cost. Raise only after checking real usage in crawl_runs.usage_usd.
+    "APIFY_MAX_USD_PER_RUN": "3",
+    // Leave empty. Set to "RESIDENTIAL" only if retries keep getting blocked (costs more per page).
+    "RETRY_PROXY_GROUP": "",
+    "MAX_URLS_PER_DAY": "300"
+  },
+
+  "observability": { "enabled": true }
+}
