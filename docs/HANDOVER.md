@@ -27,3 +27,16 @@ bun run dev
 
 - Discover / research gaps / AI edit-section (Claude)
 - Publish / rollback (website repo + Cloudflare Pages deploy)
+
+## Daily crawl Worker (separate deploy)
+
+`workers/salt-atlas-crawl/` is a standalone Cloudflare Worker (`salt-atlas-crawl`) with its own
+`wrangler.jsonc`, cron and Workflow. It reads `sources` rows the scout logs (tag `operator`,
+status `pending`), runs one capped Apify crawl a day, parses every page in code (contacts,
+WhatsApp only when explicit, full-size photo links, prices, capacity) and writes a short brief per
+resort to `prospects.brief_md` for Claude to read. It shares the `salt-atlas-scrape` D1 database and
+R2 bucket with this app but has its own migration (`0100_crawl_pipeline.sql`, already applied).
+
+It is excluded from this app's lint, tests and build. Deploy it from its own folder:
+`cd workers/salt-atlas-crawl && npm install && npx wrangler deploy`. Full runbook:
+`workers/salt-atlas-crawl/README.md`.
