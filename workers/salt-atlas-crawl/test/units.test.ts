@@ -309,3 +309,12 @@ test('depth-1 crawl follows only photo, room and surf pages on the resorts own s
   assert.equal(retry.includeUrlGlobs, undefined);
   assert.ok(followGlobs(['nihi.com'])[0].glob.includes('gallery'));
 });
+
+test('cron firings map to the right job by UTC time', async () => {
+  const { jobFor } = await import('../src/schedule.ts');
+  const at = (hhmm: string) => Date.parse(`2026-11-12T${hhmm}:00Z`);
+  assert.equal(jobFor(at('01:00')), 'crawl');
+  assert.equal(jobFor(at('20:45')), 'evening_crawl');
+  for (const t of ['03:30', '04:30', '05:30', '06:30']) assert.equal(jobFor(at(t)), 'photos');
+  assert.equal(jobFor(at('07:30')), 'watchdog');
+});

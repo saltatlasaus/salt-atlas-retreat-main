@@ -19,6 +19,7 @@ import { logEvent, pageStatements } from './db.ts';
 import { postToTeams } from './notify.ts';
 import { mirrorPhotos, refusedPhotos, serveCandidate, servePhoto } from './photos.ts';
 import { stagedForReview } from './review.ts';
+import { jobFor } from './schedule.ts';
 import { processPage } from './process.ts';
 import type { BatchSource, Env, PageExtract } from './types.ts';
 import { CrawlWorkflow } from './workflow.ts';
@@ -38,8 +39,8 @@ function timingSafeEqual(a: string, b: string): boolean {
 const today = (d = new Date()) => d.toISOString().slice(0, 10);
 const validDate = (s: string | null) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
 
-export async function startCrawl(env: Env, batch: string, trigger: 'cron' | 'manual', force: boolean): Promise<{ id: string; created: boolean }> {
-  const id = force ? `crawl-${batch}-r${Date.now().toString(36)}` : `crawl-${batch}`;
+export async function startCrawl(env: Env, batch: string, trigger: 'cron' | 'manual', force: boolean, suffix = ''): Promise<{ id: string; created: boolean }> {
+  const id = force ? `crawl-${batch}-r${Date.now().toString(36)}` : `crawl-${batch}${suffix}`;
   try {
     await env.CRAWL.create({ id, params: { batch, trigger } });
     return { id, created: true };
@@ -179,35 +180,37 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const batch = today(new Date(controller.scheduledTime));
-    if (controller.cron === CRON_WATCHDOG) {
+    const job = jobFor(controller.scheduledTime);
+    if (job === 'watchdog') {
       ctx.waitUntil(watchdog(env, batch));
       return;
     }
-    if (controller.cron === CRON_PHOTOS) {
+    if (job === 'photos') {
       ctx.waitUntil(
         mirrorPhotos(env).then(
-          (r) => logEvent(env.DB, `photos-${batch}`, 'photos_mirrored', r),
+          (r) => logEvent(env.DB, `photos-${batch}-${new Date(controller.scheduledTime).getUTCHours()}`, 'photos_mirrored', r),
           (e) => postToTeams(env, `⚠️ Photo download ${batch} failed`, [['Error', String(e).slice(0, 300)]], true),
         ),
       );
       return;
     }
     // 20:45 UTC: crawl what today's scout runs logged, so pages can be built from 21:53. It is filed under
-    // tomorrow's date. The 01:00 run then finds that date taken and starts a fresh run for anything left over.
-    const evening = controller.cron === CRON_EVENING_CRAWL;
+    // tomorrow's date. The 01:00 run then finds that date taken and runs once more, as crawl-<date>-late,
+    // for anything left over (a fixed id, so a double firing is still harmless).
+    const evening = job === 'evening_crawl';
     const crawlDate = evening ? today(new Date(controller.scheduledTime + 6 * 3600 * 1000)) : batch;
     ctx.waitUntil(
       startCrawl(env, crawlDate, 'cron', false)
-        .then((r) => (r.created || evening ? r : startCrawl(env, crawlDate, 'cron', true)))
+        .then((r) => (r.created || evening ? r : startCrawl(env, crawlDate, 'cron', false, '-late')))
         .then(
-        (r) => logEvent(env.DB, r.id, r.created ? 'started' : 'already_started', { batch: crawlDate }),
-        (e) => postToTeams(env, `⚠️ Crawl ${batch} could not start`, [['Error', String(e).slice(0, 300)]], true),
-      ),
+          (r) => logEvent(env.DB, r.id, r.created ? 'started' : 'already_started', { batch: crawlDate }),
+          (e) => postToTeams(env, `⚠️ Crawl ${crawlDate} could not start`, [['Error', String(e).slice(0, 300)]], true),
+        ),
     );
   },
 };
 
-// Must match "triggers.crons" in wrangler.jsonc (all UTC). Any other cron starts the crawl (01:00).
+// The schedule in "triggers.crons" in wrangler.jsonc (all UTC). jobFor() decides the job from the firing time.
 export const CRON_PHOTOS = '30 3-6 * * *';
 export const CRON_EVENING_CRAWL = '45 20 * * *';
 export const CRON_WATCHDOG = '30 7 * * *';
