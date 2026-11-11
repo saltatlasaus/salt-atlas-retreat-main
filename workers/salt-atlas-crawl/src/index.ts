@@ -1,7 +1,7 @@
 // Salt Atlas crawl Worker: entry points.
 //
-//   Cron 20:45 UTC   crawl what today's scout runs logged (filed under tomorrow's date)
-//   Cron 01:00 UTC   crawl anything left over (a fresh run if 20:45 already used the date)
+//   Cron :07 :22 :37 :52   start a crawl by itself once the scout has finished logging pages (see autoCrawl)
+//   Cron 01:00 UTC   safety net: crawl anything still waiting
 //   Cron 03:30-06:30 UTC hourly   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
 //   Cron 07:30 UTC   Teams: this morning's staged pages to review (preview links + checks), and alerts if the crawl
 //                    failed, ready pages weren't staged at 07:03, or resort sites refused photos
@@ -19,6 +19,7 @@ import { logEvent, pageStatements } from './db.ts';
 import { postToTeams } from './notify.ts';
 import { mirrorPhotos, refusedPhotos, serveCandidate, servePhoto } from './photos.ts';
 import { stagedForReview } from './review.ts';
+import { autoCrawl, startCrawl } from './auto.ts';
 import { jobFor } from './schedule.ts';
 import { processPage } from './process.ts';
 import type { BatchSource, Env, PageExtract } from './types.ts';
@@ -38,18 +39,6 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 const today = (d = new Date()) => d.toISOString().slice(0, 10);
 const validDate = (s: string | null) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
-
-export async function startCrawl(env: Env, batch: string, trigger: 'cron' | 'manual', force: boolean, suffix = ''): Promise<{ id: string; created: boolean }> {
-  const id = force ? `crawl-${batch}-r${Date.now().toString(36)}` : `crawl-${batch}${suffix}`;
-  try {
-    await env.CRAWL.create({ id, params: { batch, trigger } });
-    return { id, created: true };
-  } catch (e) {
-    // The deterministic id makes a second cron firing (or a double click) harmless.
-    if (/exist/i.test(e instanceof Error ? e.message : String(e))) return { id, created: false };
-    throw e;
-  }
-}
 
 async function handleWebhook(req: Request, env: Env, url: URL): Promise<Response> {
   if (!timingSafeEqual(url.searchParams.get('key') || '', env.WEBHOOK_SECRET || '')) return new Response('Forbidden', { status: 403 });
@@ -194,26 +183,26 @@ export default {
       );
       return;
     }
-    // 20:45 UTC: crawl what today's scout runs logged, so pages can be built from 21:53. It is filed under
-    // tomorrow's date. The 01:00 run then finds that date taken and runs once more, as crawl-<date>-late,
-    // for anything left over (a fixed id, so a double firing is still harmless).
-    const evening = job === 'evening_crawl';
-    const crawlDate = evening ? today(new Date(controller.scheduledTime + 6 * 3600 * 1000)) : batch;
+    if (job === 'auto_crawl') {
+      ctx.waitUntil(
+        autoCrawl(env, batch, controller.scheduledTime).catch((e) =>
+          postToTeams(env, `⚠️ Automatic crawl ${batch} could not start`, [['Error', String(e).slice(0, 300)]], true),
+        ),
+      );
+      return;
+    }
+    // 01:00 UTC safety net: crawl anything still waiting (crawl-<date>, or crawl-<date>-late if that id is taken).
     ctx.waitUntil(
-      startCrawl(env, crawlDate, 'cron', false)
-        .then((r) => (r.created || evening ? r : startCrawl(env, crawlDate, 'cron', false, '-late')))
+      startCrawl(env, batch, 'cron', false)
+        .then((r) => (r.created ? r : startCrawl(env, batch, 'cron', false, '-late')))
         .then(
-          (r) => logEvent(env.DB, r.id, r.created ? 'started' : 'already_started', { batch: crawlDate }),
-          (e) => postToTeams(env, `⚠️ Crawl ${crawlDate} could not start`, [['Error', String(e).slice(0, 300)]], true),
+          (r) => logEvent(env.DB, r.id, r.created ? 'started' : 'already_started', { batch }),
+          (e) => postToTeams(env, `⚠️ Crawl ${batch} could not start`, [['Error', String(e).slice(0, 300)]], true),
         ),
     );
   },
 };
 
-// The schedule in "triggers.crons" in wrangler.jsonc (all UTC). jobFor() decides the job from the firing time.
-export const CRON_PHOTOS = '30 3-6 * * *';
-export const CRON_EVENING_CRAWL = '45 20 * * *';
-export const CRON_WATCHDOG = '30 7 * * *';
 
 /** Morning check before the 9am review: today's crawl, and pages that should have been staged at 07:03 but weren't. */
 async function watchdog(env: Env, batch: string): Promise<void> {

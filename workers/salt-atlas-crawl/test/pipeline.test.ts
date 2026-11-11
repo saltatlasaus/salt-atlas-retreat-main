@@ -220,3 +220,22 @@ test('pages the scout already stamped with an older date are adopted, unless tha
   db.db.exec(`UPDATE crawl_runs SET finished_at = '2026-11-10T18:00:00Z'`);
   assert.equal((await claimBatch(db, BATCH, 300)).length, 6, 'once it has finished, leftovers are adopted');
 });
+
+test('the crawl starts by itself once the scout has gone quiet, and not while a crawl runs', async () => {
+  const { autoCrawl } = await import('../src/auto.ts');
+  const started: string[] = [];
+  const e = { ...env, CRAWL: { create: async ({ id }: { id: string }) => { started.push(id); } } } as unknown as Env;
+  db.db.exec(`DELETE FROM sources; DELETE FROM crawl_runs`);
+  db.db.exec(`INSERT OR IGNORE INTO prospects (id, name, country) VALUES ('auto.test', 'Auto Test', 'Testland')`);
+  const pid = 'auto.test';
+  const at = Date.parse('2026-11-11T12:22:00Z');
+  db.db.exec(`INSERT INTO sources (prospect_id, url, tag, crawl_status, created_at) VALUES ('${pid}', 'https://x.test/a', 'operator', 'pending', datetime('now'))`);
+  assert.equal(await autoCrawl(e, '2026-11-11', at), null, 'scout still writing: wait');
+  db.db.exec(`UPDATE sources SET created_at = datetime('now', '-30 minutes')`);
+  db.db.exec(`INSERT INTO crawl_runs (id, instance_id, batch, kind, status, started_at) VALUES ('r:primary', 'r', '2026-11-11', 'primary', 'RUNNING', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-10 minutes'))`);
+  assert.equal(await autoCrawl(e, '2026-11-11', at), null, 'a crawl is running: wait');
+  db.db.exec(`DELETE FROM crawl_runs`);
+  const r = await autoCrawl(e, '2026-11-11', at);
+  assert.deepEqual(started, ['crawl-2026-11-11-a1222']);
+  assert.equal(r?.created, true);
+});
