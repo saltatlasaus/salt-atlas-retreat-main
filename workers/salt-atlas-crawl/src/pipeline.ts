@@ -57,6 +57,24 @@ async function handleItem(
   for (const c of candidates) sources ??= loose.get(looseKey(c) || '');
 
   const isPdf = /pdf/i.test(item.crawl?.contentType || item.metadata?.headers?.['content-type'] || '') || /\.pdf(\?|$)/i.test(item.url || '');
+  if (!sources && !isPdf && item.url) {
+    // A page the depth-1 crawl followed from one of today's pages (gallery, rooms, surf...): log it as an
+    // operator source of that resort so its photos and text count, exactly like a page the scout logged.
+    // Only brand-new pages: a page already logged in another batch is left to its own crawl.
+    const host = safeUrl(item.url)?.hostname.replace(/^www\./, '') || '';
+    const owner = [...byDomain.values()].find((r) => host === r.prospect_id || host.endsWith('.' + r.prospect_id));
+    if (owner) {
+      const path = safeUrl(item.url)?.pathname || '';
+      const row = await env.DB
+        .prepare(`INSERT INTO sources (prospect_id, url, tag, feeds, crawl_status, batch)
+                  VALUES (?1, ?2, 'operator', ?3, 'pending', ?4)
+                  ON CONFLICT(prospect_id, url) DO NOTHING
+                  RETURNING id`)
+        .bind(owner.prospect_id, item.url, `followed: ${path}`.slice(0, 200), a.batch)
+        .first<{ id: number }>();
+      if (row) sources = [{ id: row.id, prospect_id: owner.prospect_id, url: item.url, feeds: `followed: ${path}`, retry_count: 0, country: owner.country }];
+    }
+  }
   if (!sources) {
     if (isPdf && item.url) {
       // A rate sheet or brochure linked from one of today's pages: keep its text for the brief.
@@ -145,12 +163,12 @@ export async function reconcile(
   return summary;
 }
 
-/** One round of size sniffing: up to 40 images, 5 at a time. Returns how many it tried. */
+/** One round of size sniffing: up to 100 images, 6 at a time. Returns how many it tried. */
 export async function sniffRound(env: Env, batch: string): Promise<number> {
-  const list = (await imagesToSniff(env.DB, batch, 25)).slice(0, 40);
+  const list = (await imagesToSniff(env.DB, batch, 400)).slice(0, 100);
   if (!list.length) return 0;
   const results: { id: number; size: { width: number; height: number } | null }[] = [];
-  await pool(list, 5, async (img) => {
+  await pool(list, 6, async (img) => {
     results.push({ id: img.id, size: await sniffRemoteSize(img.image_url) });
   });
   const stmts = results.map((r) =>

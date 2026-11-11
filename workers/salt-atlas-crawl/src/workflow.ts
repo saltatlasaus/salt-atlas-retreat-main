@@ -135,8 +135,8 @@ export class CrawlWorkflow extends WorkflowEntrypoint<Env, CrawlParams> {
         results.push(summary);
       }
 
-      // 5. Read pixel sizes for top images whose size the page did not state.
-      for (let round = 0; round < 10; round++) {
+      // 5. Read pixel sizes for every photo whose size the page did not state (gap fill needs real sizes, not guesses).
+      for (let round = 0; round < 40; round++) {
         const n = await step.do(`image sizes ${round}`, LONG, async () => sniffRound(env, batch));
         if (n === 0) break;
       }

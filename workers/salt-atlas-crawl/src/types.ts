@@ -19,6 +19,8 @@ export interface Env {
   APIFY_TIMEOUT_SECS?: string;
   APIFY_MAX_USD_PER_RUN?: string;
   RETRY_PROXY_GROUP?: string;
+  CRAWL_DEPTH?: string;
+  FOLLOW_PAGES_PER_SITE?: string;
   MAX_URLS_PER_DAY?: string;
 }
 

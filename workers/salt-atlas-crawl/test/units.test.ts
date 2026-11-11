@@ -296,3 +296,16 @@ test('the 9am review list shows this morning\'s staged pages with links and chec
   const list = await stagedForReview(db);
   assert.deepEqual(list, [{ slug: 'aloita-resort', name: 'Aloita Resort', url: 'https://staging.saltatlas-website.pages.dev/destinations/aloita-resort/', check: 'Check every photo.' }]);
 });
+
+test('depth-1 crawl follows only photo, room and surf pages on the resorts own sites', async () => {
+  const { buildCrawlInput, followGlobs, rootDomains } = await import('../src/apify.ts');
+  assert.deepEqual(rootDomains(['https://www.nihi.com/', 'https://nihi.com/sumba/surf', 'https://tengirri.com/x']), ['nihi.com', 'tengirri.com']);
+  const input = buildCrawlInput(['https://www.nihi.com/', 'https://tengirri.com/'], 'primary', {});
+  assert.equal(input.maxCrawlDepth, 1);
+  assert.equal((input.includeUrlGlobs as unknown[]).length, 4);
+  assert.equal(input.maxCrawlPages, 2 + 24 + 10);
+  const retry = buildCrawlInput(['https://www.nihi.com/'], 'retry', {});
+  assert.equal(retry.maxCrawlDepth, 0);
+  assert.equal(retry.includeUrlGlobs, undefined);
+  assert.ok(followGlobs(['nihi.com'])[0].glob.includes('gallery'));
+});

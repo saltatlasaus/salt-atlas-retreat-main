@@ -1,7 +1,8 @@
 // Salt Atlas crawl Worker: entry points.
 //
-//   Cron 01:00 UTC   start today's crawl workflow (pages the scout logged the day before)
-//   Cron 06:30 UTC   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
+//   Cron 20:45 UTC   crawl what today's scout runs logged (filed under tomorrow's date)
+//   Cron 01:00 UTC   crawl anything left over (a fresh run if 20:45 already used the date)
+//   Cron 03:30-06:30 UTC hourly   copy the photos of ready page drafts into R2 (served at GET /photo/<key>)
 //   Cron 07:30 UTC   Teams: this morning's staged pages to review (preview links + checks), and alerts if the crawl
 //                    failed, ready pages weren't staged at 07:03, or resort sites refused photos
 //   POST /apify/webhook          Apify says a run finished (wakes the workflow early)
@@ -191,9 +192,15 @@ export default {
       );
       return;
     }
+    // 20:45 UTC: crawl what today's scout runs logged, so pages can be built from 21:53. It is filed under
+    // tomorrow's date. The 01:00 run then finds that date taken and starts a fresh run for anything left over.
+    const evening = controller.cron === CRON_EVENING_CRAWL;
+    const crawlDate = evening ? today(new Date(controller.scheduledTime + 6 * 3600 * 1000)) : batch;
     ctx.waitUntil(
-      startCrawl(env, batch, 'cron', false).then(
-        (r) => logEvent(env.DB, r.id, r.created ? 'started' : 'already_started', { batch }),
+      startCrawl(env, crawlDate, 'cron', false)
+        .then((r) => (r.created || evening ? r : startCrawl(env, crawlDate, 'cron', true)))
+        .then(
+        (r) => logEvent(env.DB, r.id, r.created ? 'started' : 'already_started', { batch: crawlDate }),
         (e) => postToTeams(env, `⚠️ Crawl ${batch} could not start`, [['Error', String(e).slice(0, 300)]], true),
       ),
     );
@@ -201,7 +208,8 @@ export default {
 };
 
 // Must match "triggers.crons" in wrangler.jsonc (all UTC). Any other cron starts the crawl (01:00).
-export const CRON_PHOTOS = '30 6 * * *';
+export const CRON_PHOTOS = '30 3-6 * * *';
+export const CRON_EVENING_CRAWL = '45 20 * * *';
 export const CRON_WATCHDOG = '30 7 * * *';
 
 /** Morning check before the 9am review: today's crawl, and pages that should have been staged at 07:03 but weren't. */

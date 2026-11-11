@@ -9,7 +9,7 @@
 
   // All UTC, so the order holds through the clock change. Pages are staged by ~07:15 UTC (08:15 in summer), ready for a 9am review.
   // 01:00 crawl (briefs by ~02:00, before the 01:53 to 05:53 gap fill). 06:30 photo download. 07:30 watchdog (after 07:03 staging).
-  "triggers": { "crons": ["0 1 * * *", "30 6 * * *", "30 7 * * *"] },
+  "triggers": { "crons": ["45 20 * * *", "0 1 * * *", "30 3-6 * * *", "30 7 * * *"] },
 
   "workflows": [
     { "name": "salt-atlas-crawl", "binding": "CRAWL", "class_name": "CrawlWorkflow" }
@@ -28,10 +28,14 @@
     "APIFY_MEMORY_MB": "4096",
     "APIFY_TIMEOUT_SECS": "3600",
     // Hard cap on what one Apify run may cost. Raise only after checking real usage in crawl_runs.usage_usd.
-    "APIFY_MAX_USD_PER_RUN": "3",
+    "APIFY_MAX_USD_PER_RUN": "8",
+    // 1 = also read the gallery, rooms, surf and activity pages linked from each logged page (own site only)
+    "CRAWL_DEPTH": "1",
+    // Most extra pages the depth-1 crawl may read per resort
+    "FOLLOW_PAGES_PER_SITE": "12",
     // Leave empty. Set to "RESIDENTIAL" only if retries keep getting blocked (costs more per page).
     "RETRY_PROXY_GROUP": "",
-    "MAX_URLS_PER_DAY": "300"
+    "MAX_URLS_PER_DAY": "400"
   },
 
   "observability": { "enabled": true }

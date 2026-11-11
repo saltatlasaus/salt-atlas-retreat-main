@@ -3,14 +3,16 @@
 // those are retried on later mornings (MAX_ATTEMPTS), flagged by the 07:30 watchdog, and can be fetched from a
 // computer with internet with tools/fetch_failed_photos.py. The daily staging task points staged pages at these
 // copies, so they never depend on hotlinking; at go-live tools/pull_pages.py converts them to WebP
-// in the website repo. Runs on the 06:30 UTC cron (after the 01:53 to 05:53 gap-fill sessions, before 07:03 staging).
+// in the website repo. Runs hourly 03:30 to 06:30 UTC, between the gap-fill sessions, before 07:03 staging.
 
 import type { D1Database, Env } from './types.ts';
 
-const MAX_PER_RUN = 150;          // photos fetched per cron run (well inside the subrequest limit)
+const MAX_PER_RUN = 250;          // photos fetched per cron run: 250 x (fetch + R2 put + D1 write) stays under 1,000 subrequests
+                                  // The cron runs at 03:30, 04:30, 05:30 and 06:30 UTC, so up to 1,000 photos a night.
 export const MAX_ATTEMPTS = 3;    // refused photos are retried on later mornings, then left to tools/fetch_failed_photos.py
 const MAX_BYTES = 15 * 1024 * 1024;
-const UA = 'Mozilla/5.0 (compatible; SaltAtlasPhotoMirror/1.0; +https://www.saltatlas.com)';
+// A normal browser user agent: several resort sites refuse anything that looks like a bot (HTTP 403).
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 
 /** Deterministic key for a photo URL: 32 hex chars of SHA-256, plus a guessed extension. */
 export async function photoKey(url: string): Promise<string> {

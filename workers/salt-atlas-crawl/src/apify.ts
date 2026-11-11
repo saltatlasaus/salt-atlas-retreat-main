@@ -12,14 +12,48 @@ export type RunKind = 'primary' | 'retry';
 export const REMOVE_ELEMENTS =
   "nav, style, svg, img[src^='data:'], script:not([type='application/ld+json']), [role='dialog'], [role='alertdialog'], [aria-modal='true']";
 
-export function buildCrawlInput(urls: string[], kind: RunKind, env: Pick<Env, 'RETRY_PROXY_GROUP'>): Record<string, unknown> {
+/** Words in a link that point at a page with photos or facts the destination page needs. */
+export const FOLLOW_WORDS = [
+  'gallery', 'galeria', 'photo', 'photos', 'picture', 'pictures', 'media', 'room', 'rooms', 'cabin', 'cabins', 'villa', 'villas',
+  'suite', 'suites', 'accommodation', 'accommodations', 'stay', 'lodging', 'bungalow', 'bungalows', 'surf', 'surfing', 'wave',
+  'waves', 'break', 'breaks', 'boat', 'boats', 'charter', 'charters', 'yacht', 'vessel', 'activities', 'activity', 'experience',
+  'experiences', 'amenities', 'facilities', 'dining', 'food', 'restaurant', 'spa', 'wellness', 'yoga', 'fishing', 'diving',
+  'snorkel', 'snorkelling', 'excursion', 'excursions', 'getting-there', 'location', 'the-resort', 'the-boat', 'the-lodge',
+];
+
+/** Root domains (no www) of the start URLs. */
+export function rootDomains(urls: string[]): string[] {
+  const out = new Set<string>();
+  for (const u of urls) {
+    try { out.add(new URL(u).hostname.toLowerCase().replace(/^www\./, '')); } catch { /* skip */ }
+  }
+  return [...out];
+}
+
+/** Globs that keep the depth-1 crawl on each resort's own site and on photo/room/surf pages only. */
+export function followGlobs(domains: string[]): { glob: string }[] {
+  const w = `{${FOLLOW_WORDS.join(',')}}`;
+  return domains.flatMap((d) => [
+    { glob: `https://{www.,}${d}/**/*${w}*` },
+    { glob: `https://{www.,}${d}/**/*${w}*/**` },
+  ]);
+}
+
+export function buildCrawlInput(urls: string[], kind: RunKind, env: Pick<Env, 'RETRY_PROXY_GROUP' | 'CRAWL_DEPTH' | 'FOLLOW_PAGES_PER_SITE'>): Record<string, unknown> {
   const n = urls.length;
+  const domains = rootDomains(urls);
+  // Depth 1 (default): also read the gallery, rooms, surf and activity pages each logged page links to,
+  // so a missed gallery page no longer means a page with no photos. Retries stay at depth 0.
+  const depth = kind === 'retry' ? 0 : Math.max(0, Math.min(2, Number(env.CRAWL_DEPTH ?? '1')));
+  const perSite = Number(env.FOLLOW_PAGES_PER_SITE || '12');
+  const extra = depth > 0 ? domains.length * perSite : 0;
   const input: Record<string, unknown> = {
     startUrls: urls.map((url) => ({ url })),
     crawlerType: 'playwright:adaptive',
-    maxCrawlDepth: 0,
-    maxCrawlPages: n + 10,
-    maxResults: n * 2 + 20, // headroom only; depth 0 means no extra pages are followed (PDF links are listed, not fetched)
+    maxCrawlDepth: depth,
+    ...(depth > 0 ? { includeUrlGlobs: followGlobs(domains) } : {}),
+    maxCrawlPages: n + extra + 10,
+    maxResults: (n + extra) * 2 + 20, // headroom (PDF links are listed, not fetched)
     useSitemaps: false,
     useLlmsTxt: false,
     respectRobotsTxtFile: true,
